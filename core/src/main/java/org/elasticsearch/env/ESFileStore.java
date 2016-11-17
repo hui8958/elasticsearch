@@ -169,7 +169,7 @@ class ESFileStore extends FileStore {
                 if (Character.isAlphabetic(driveLetter) == false || root.charAt(1) != ':') {
                     throw new RuntimeException("root isn't a drive letter: " + root);
                 }
-            } catch (Throwable checkFailed) {
+            } catch (Exception checkFailed) {
                 // something went wrong, 
                 possibleBug.addSuppressed(checkFailed);
                 throw possibleBug;
@@ -188,7 +188,7 @@ class ESFileStore extends FileStore {
                     }
                 }
                 throw new RuntimeException("no filestores matched");
-            } catch (Throwable weTried) {
+            } catch (Exception weTried) {
                 IOException newException = new IOException("Unable to retrieve filestore for '" + path + "', tried matching against " + Arrays.toString(fileStores), weTried);
                 newException.addSuppressed(possibleBug);
                 throw newException;
@@ -213,17 +213,32 @@ class ESFileStore extends FileStore {
 
     @Override
     public long getTotalSpace() throws IOException {
-        return in.getTotalSpace();
+        long result = in.getTotalSpace();
+        if (result < 0) {
+            // see https://bugs.openjdk.java.net/browse/JDK-8162520:
+            result = Long.MAX_VALUE;
+        }
+        return result;
     }
 
     @Override
     public long getUsableSpace() throws IOException {
-        return in.getUsableSpace();
+        long result = in.getUsableSpace();
+        if (result < 0) {
+            // see https://bugs.openjdk.java.net/browse/JDK-8162520:
+            result = Long.MAX_VALUE;
+        }
+        return result;
     }
 
     @Override
     public long getUnallocatedSpace() throws IOException {
-        return in.getUnallocatedSpace();
+        long result = in.getUnallocatedSpace();
+        if (result < 0) {
+            // see https://bugs.openjdk.java.net/browse/JDK-8162520:
+            result = Long.MAX_VALUE;
+        }
+        return result;
     }
 
     @Override

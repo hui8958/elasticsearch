@@ -32,13 +32,10 @@ import org.elasticsearch.search.aggregations.support.ValuesSource;
 import org.elasticsearch.search.aggregations.support.ValuesSource.Numeric;
 
 import java.io.IOException;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
-/**
- *
- */
 public class DoubleTermsAggregator extends LongTermsAggregator {
 
     public DoubleTermsAggregator(String name, AggregatorFactories factories, ValuesSource.Numeric valuesSource, DocValueFormat format,
@@ -66,20 +63,16 @@ public class DoubleTermsAggregator extends LongTermsAggregator {
         return convertToDouble(terms);
     }
 
-    private static DoubleTerms.Bucket convertToDouble(InternalTerms.Bucket bucket) {
-        final long term = ((Number) bucket.getKey()).longValue();
-        final double value = NumericUtils.sortableLongToDouble(term);
-        return new DoubleTerms.Bucket(value, bucket.docCount, bucket.aggregations, bucket.showDocCountError, bucket.docCountError, bucket.format);
-    }
-
     private static DoubleTerms convertToDouble(LongTerms terms) {
-        final InternalTerms.Bucket[] buckets = terms.getBuckets().toArray(new InternalTerms.Bucket[0]);
-        for (int i = 0; i < buckets.length; ++i) {
-            buckets[i] = convertToDouble(buckets[i]);
-        }
-        return new DoubleTerms(terms.getName(), terms.order, terms.format, terms.requiredSize, terms.shardSize, terms.minDocCount,
-                Arrays.asList(buckets), terms.showTermDocCountError, terms.docCountError, terms.otherDocCount, terms.pipelineAggregators(),
-                terms.getMetaData());
+        List<DoubleTerms.Bucket> buckets = terms.buckets.stream().map(DoubleTermsAggregator::convertToDouble).collect(Collectors.toList());
+        return new DoubleTerms(terms.getName(), terms.order, terms.requiredSize, terms.minDocCount, terms.pipelineAggregators(),
+                terms.getMetaData(), terms.format, terms.shardSize, terms.showTermDocCountError, terms.otherDocCount, buckets,
+                terms.docCountError);
     }
 
+    private static DoubleTerms.Bucket convertToDouble(LongTerms.Bucket bucket) {
+        double value = NumericUtils.sortableLongToDouble(bucket.term);
+        return new DoubleTerms.Bucket(value, bucket.docCount, bucket.aggregations, bucket.showDocCountError, bucket.docCountError,
+                bucket.format);
+    }
 }

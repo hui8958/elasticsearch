@@ -18,7 +18,9 @@
  */
 package org.elasticsearch.index.shard;
 
-import org.elasticsearch.common.logging.ESLogger;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.message.ParameterizedMessage;
+import org.apache.logging.log4j.util.Supplier;
 import org.elasticsearch.index.engine.Engine;
 
 import java.util.List;
@@ -36,14 +38,19 @@ public interface IndexingOperationListener {
     }
 
     /**
-     * Called after the indexing operation occurred.
+     * Called after the indexing operation occurred. Note that this is
+     * also called when indexing a document did not succeed due to document
+     * related failures. See {@link #postIndex(Engine.Index, Exception)}
+     * for engine level failures
      */
-    default void postIndex(Engine.Index index, boolean created) {}
+    default void postIndex(Engine.Index index, Engine.IndexResult result) {}
 
     /**
-     * Called after the indexing operation occurred with exception.
+     * Called after the indexing operation occurred with engine level exception.
+     * See {@link #postIndex(Engine.Index, Engine.IndexResult)} for document
+     * related failures
      */
-    default void postIndex(Engine.Index index, Throwable ex) {}
+    default void postIndex(Engine.Index index, Exception ex) {}
 
     /**
      * Called before the delete occurs.
@@ -54,23 +61,28 @@ public interface IndexingOperationListener {
 
 
     /**
-     * Called after the delete operation occurred.
+     * Called after the delete operation occurred. Note that this is
+     * also called when deleting a document did not succeed due to document
+     * related failures. See {@link #postDelete(Engine.Delete, Exception)}
+     * for engine level failures
      */
-    default void postDelete(Engine.Delete delete) {}
+    default void postDelete(Engine.Delete delete, Engine.DeleteResult result) {}
 
     /**
-     * Called after the delete operation occurred with exception.
+     * Called after the delete operation occurred with engine level exception.
+     * See {@link #postDelete(Engine.Delete, Engine.DeleteResult)} for document
+     * related failures
      */
-    default void postDelete(Engine.Delete delete, Throwable ex) {}
+    default void postDelete(Engine.Delete delete, Exception ex) {}
 
     /**
      * A Composite listener that multiplexes calls to each of the listeners methods.
      */
     final class CompositeListener implements IndexingOperationListener{
         private final List<IndexingOperationListener> listeners;
-        private final ESLogger logger;
+        private final Logger logger;
 
-        public CompositeListener(List<IndexingOperationListener> listeners, ESLogger logger) {
+        public CompositeListener(List<IndexingOperationListener> listeners, Logger logger) {
             this.listeners = listeners;
             this.logger = logger;
         }
@@ -81,33 +93,34 @@ public interface IndexingOperationListener {
             for (IndexingOperationListener listener : listeners) {
                 try {
                     listener.preIndex(operation);
-                } catch (Throwable t) {
-                    logger.warn("preIndex listener [{}] failed", t, listener);
+                } catch (Exception e) {
+                    logger.warn((Supplier<?>) () -> new ParameterizedMessage("preIndex listener [{}] failed", listener), e);
                 }
             }
             return operation;
         }
 
         @Override
-        public void postIndex(Engine.Index index, boolean created) {
+        public void postIndex(Engine.Index index, Engine.IndexResult result) {
             assert index != null;
             for (IndexingOperationListener listener : listeners) {
                 try {
-                    listener.postIndex(index, created);
-                } catch (Throwable t) {
-                    logger.warn("postIndex listener [{}] failed", t, listener);
+                    listener.postIndex(index, result);
+                } catch (Exception e) {
+                    logger.warn((Supplier<?>) () -> new ParameterizedMessage("postIndex listener [{}] failed", listener), e);
                 }
             }
         }
 
         @Override
-        public void postIndex(Engine.Index index, Throwable ex) {
+        public void postIndex(Engine.Index index, Exception ex) {
             assert index != null && ex != null;
             for (IndexingOperationListener listener : listeners) {
                 try {
                     listener.postIndex(index, ex);
-                } catch (Throwable t) {
-                    logger.warn("postIndex listener [{}] failed", t, listener);
+                } catch (Exception inner) {
+                    inner.addSuppressed(ex);
+                    logger.warn((Supplier<?>) () -> new ParameterizedMessage("postIndex listener [{}] failed", listener), inner);
                 }
             }
         }
@@ -118,33 +131,34 @@ public interface IndexingOperationListener {
             for (IndexingOperationListener listener : listeners) {
                 try {
                     listener.preDelete(delete);
-                } catch (Throwable t) {
-                    logger.warn("preDelete listener [{}] failed", t, listener);
+                } catch (Exception e) {
+                    logger.warn((Supplier<?>) () -> new ParameterizedMessage("preDelete listener [{}] failed", listener), e);
                 }
             }
             return delete;
         }
 
         @Override
-        public void postDelete(Engine.Delete delete) {
+        public void postDelete(Engine.Delete delete, Engine.DeleteResult result) {
             assert delete != null;
             for (IndexingOperationListener listener : listeners) {
                 try {
-                    listener.postDelete(delete);
-                } catch (Throwable t) {
-                    logger.warn("postDelete listener [{}] failed", t, listener);
+                    listener.postDelete(delete, result);
+                } catch (Exception e) {
+                    logger.warn((Supplier<?>) () -> new ParameterizedMessage("postDelete listener [{}] failed", listener), e);
                 }
             }
         }
 
         @Override
-        public void postDelete(Engine.Delete delete, Throwable ex) {
+        public void postDelete(Engine.Delete delete, Exception ex) {
             assert delete != null && ex != null;
             for (IndexingOperationListener listener : listeners) {
                 try {
                     listener.postDelete(delete, ex);
-                } catch (Throwable t) {
-                    logger.warn("postDelete listener [{}] failed", t, listener);
+                } catch (Exception inner) {
+                    inner.addSuppressed(ex);
+                    logger.warn((Supplier<?>) () -> new ParameterizedMessage("postDelete listener [{}] failed", listener), inner);
                 }
             }
         }

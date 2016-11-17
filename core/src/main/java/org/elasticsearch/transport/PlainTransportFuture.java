@@ -27,9 +27,6 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
-/**
- *
- */
 public class PlainTransportFuture<V extends TransportResponse> extends BaseFuture<V>
     implements TransportFuture<V>, TransportResponseHandler<V> {
 
@@ -87,8 +84,8 @@ public class PlainTransportFuture<V extends TransportResponse> extends BaseFutur
         try {
             handler.handleResponse(response);
             set(response);
-        } catch (Throwable t) {
-            handleException(new ResponseHandlerFailureTransportException(t));
+        } catch (Exception e) {
+            handleException(new ResponseHandlerFailureTransportException(e));
         }
     }
 

@@ -19,6 +19,7 @@
 
 package org.elasticsearch.index.reindex;
 
+import org.apache.logging.log4j.Logger;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.delete.DeleteRequest;
 import org.elasticsearch.action.support.ActionFilters;
@@ -29,12 +30,8 @@ import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.metadata.IndexNameExpressionResolver;
 import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.inject.Inject;
-import org.elasticsearch.common.logging.ESLogger;
 import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.index.mapper.internal.ParentFieldMapper;
-import org.elasticsearch.index.mapper.internal.RoutingFieldMapper;
 import org.elasticsearch.script.ScriptService;
-import org.elasticsearch.search.SearchHit;
 import org.elasticsearch.tasks.Task;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.TransportService;
@@ -56,9 +53,15 @@ public class TransportDeleteByQueryAction extends HandledTransportAction<DeleteB
 
     @Override
     protected void doExecute(Task task, DeleteByQueryRequest request, ActionListener<BulkIndexByScrollResponse> listener) {
-        ClusterState state = clusterService.state();
-        ParentTaskAssigningClient client = new ParentTaskAssigningClient(this.client, clusterService.localNode(), task);
-        new AsyncDeleteBySearchAction((BulkByScrollTask) task, logger, client, threadPool, request, listener, scriptService, state).start();
+        if (request.getSlices() > 1) {
+            ReindexParallelizationHelper.startSlices(client, taskManager, DeleteByQueryAction.INSTANCE, clusterService.localNode().getId(),
+                    (ParentBulkByScrollTask) task, request, listener);
+        } else {
+            ClusterState state = clusterService.state();
+            ParentTaskAssigningClient client = new ParentTaskAssigningClient(this.client, clusterService.localNode(), task);
+            new AsyncDeleteBySearchAction((WorkingBulkByScrollTask) task, logger, client, threadPool, request, listener, scriptService,
+                    state).start();
+        }
     }
 
     @Override
@@ -71,38 +74,47 @@ public class TransportDeleteByQueryAction extends HandledTransportAction<DeleteB
      */
     static class AsyncDeleteBySearchAction extends AbstractAsyncBulkIndexByScrollAction<DeleteByQueryRequest> {
 
-        public AsyncDeleteBySearchAction(BulkByScrollTask task, ESLogger logger, ParentTaskAssigningClient client, ThreadPool threadPool,
-                                         DeleteByQueryRequest request, ActionListener<BulkIndexByScrollResponse> listener,
-                                         ScriptService scriptService, ClusterState clusterState) {
-            super(task, logger, client, threadPool, request, request.getSearchRequest(), listener, scriptService, clusterState);
+        public AsyncDeleteBySearchAction(WorkingBulkByScrollTask task, Logger logger, ParentTaskAssigningClient client,
+                ThreadPool threadPool, DeleteByQueryRequest request, ActionListener<BulkIndexByScrollResponse> listener,
+                ScriptService scriptService, ClusterState clusterState) {
+            super(task, logger, client, threadPool, request, listener, scriptService, clusterState);
         }
 
         @Override
-        protected boolean accept(SearchHit doc) {
+        protected boolean needsSourceDocumentVersions() {
+            /*
+             * We always need the version of the source document so we can report a version conflict if we try to delete it and it has been
+             * changed.
+             */
+            return true;
+        }
+
+        @Override
+        protected boolean accept(ScrollableHitSource.Hit doc) {
             // Delete-by-query does not require the source to delete a document
             // and the default implementation checks for it
             return true;
         }
 
         @Override
-        protected RequestWrapper<DeleteRequest> buildRequest(SearchHit doc) {
+        protected RequestWrapper<DeleteRequest> buildRequest(ScrollableHitSource.Hit doc) {
             DeleteRequest delete = new DeleteRequest();
-            delete.index(doc.index());
-            delete.type(doc.type());
-            delete.id(doc.id());
-            delete.version(doc.version());
+            delete.index(doc.getIndex());
+            delete.type(doc.getType());
+            delete.id(doc.getId());
+            delete.version(doc.getVersion());
             return wrap(delete);
         }
 
         /**
-         * Overrides the parent {@link AbstractAsyncBulkIndexByScrollAction#copyMetadata(RequestWrapper, SearchHit)}
+         * Overrides the parent {@link AbstractAsyncBulkIndexByScrollAction#copyMetadata(RequestWrapper, ScrollableHitSource.Hit)}
          * method that is much more Update/Reindex oriented and so also copies things like timestamp/ttl which we
          * don't care for a deletion.
          */
         @Override
-        protected RequestWrapper<?> copyMetadata(RequestWrapper<?> request, SearchHit doc) {
-            copyParent(request, fieldValue(doc, ParentFieldMapper.NAME));
-            copyRouting(request, fieldValue(doc, RoutingFieldMapper.NAME));
+        protected RequestWrapper<?> copyMetadata(RequestWrapper<?> request, ScrollableHitSource.Hit doc) {
+            request.setParent(doc.getParent());
+            request.setRouting(doc.getRouting());
             return request;
         }
     }

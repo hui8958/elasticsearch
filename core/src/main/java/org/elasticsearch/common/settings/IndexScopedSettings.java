@@ -36,9 +36,9 @@ import org.elasticsearch.index.engine.EngineConfig;
 import org.elasticsearch.index.fielddata.IndexFieldDataService;
 import org.elasticsearch.index.mapper.FieldMapper;
 import org.elasticsearch.index.mapper.MapperService;
+import org.elasticsearch.index.seqno.LocalCheckpointService;
 import org.elasticsearch.index.similarity.SimilarityService;
 import org.elasticsearch.index.store.FsDirectoryService;
-import org.elasticsearch.index.store.IndexStore;
 import org.elasticsearch.index.store.Store;
 import org.elasticsearch.indices.IndicesRequestCache;
 
@@ -60,8 +60,6 @@ public final class IndexScopedSettings extends AbstractScopedSettings {
     public static final Set<Setting<?>> BUILT_IN_INDEX_SETTINGS = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
         MaxRetryAllocationDecider.SETTING_ALLOCATION_MAX_RETRY,
         IndexSettings.INDEX_TTL_DISABLE_PURGE_SETTING,
-        IndexStore.INDEX_STORE_THROTTLE_TYPE_SETTING,
-        IndexStore.INDEX_STORE_THROTTLE_MAX_BYTES_PER_SEC_SETTING,
         MergeSchedulerConfig.AUTO_THROTTLE_SETTING,
         MergeSchedulerConfig.MAX_MERGE_COUNT_SETTING,
         MergeSchedulerConfig.MAX_THREAD_COUNT_SETTING,
@@ -115,6 +113,8 @@ public final class IndexScopedSettings extends AbstractScopedSettings {
         IndexSettings.QUERY_STRING_LENIENT_SETTING,
         IndexSettings.ALLOW_UNMAPPED,
         IndexSettings.INDEX_CHECK_ON_STARTUP,
+        IndexSettings.INDEX_SEQ_NO_CHECKPOINT_SYNC_INTERVAL,
+        LocalCheckpointService.SETTINGS_BIT_ARRAYS_SIZE,
         IndexSettings.MAX_REFRESH_LISTENERS_PER_SHARD,
         IndexSettings.MAX_SLICES_PER_SCROLL,
         ShardsLimitAllocationDecider.INDEX_TOTAL_SHARDS_PER_NODE_SETTING,
@@ -137,9 +137,12 @@ public final class IndexScopedSettings extends AbstractScopedSettings {
         IndexModule.INDEX_STORE_PRE_LOAD_SETTING,
         IndexModule.INDEX_QUERY_CACHE_ENABLED_SETTING,
         IndexModule.INDEX_QUERY_CACHE_EVERYTHING_SETTING,
+        IndexModule.INDEX_QUERY_CACHE_TERM_QUERIES_SETTING,
         PrimaryShardAllocator.INDEX_RECOVERY_INITIAL_SHARDS_SETTING,
         FsDirectoryService.INDEX_LOCK_FACTOR_SETTING,
         EngineConfig.INDEX_CODEC_SETTING,
+        EngineConfig.INDEX_OPTIMIZE_AUTO_GENERATED_IDS,
+        IndexMetaData.SETTING_WAIT_FOR_ACTIVE_SHARDS,
         // validate that built-in similarities don't get redefined
         Setting.groupSetting("index.similarity.", (s) -> {
             Map<String, Settings> groups = s.getAsGroups();
@@ -178,12 +181,13 @@ public final class IndexScopedSettings extends AbstractScopedSettings {
     }
 
     @Override
-    protected final boolean isPrivateSetting(String key) {
+    protected boolean isPrivateSetting(String key) {
         switch (key) {
             case IndexMetaData.SETTING_CREATION_DATE:
             case IndexMetaData.SETTING_INDEX_UUID:
             case IndexMetaData.SETTING_VERSION_CREATED:
             case IndexMetaData.SETTING_VERSION_UPGRADED:
+            case IndexMetaData.SETTING_INDEX_PROVIDED_NAME:
             case MergePolicyConfig.INDEX_MERGE_ENABLED:
                 return true;
             default:

@@ -23,7 +23,6 @@ import com.carrotsearch.hppc.cursors.ObjectCursor;
 import org.elasticsearch.action.admin.indices.recovery.RecoveryResponse;
 import org.elasticsearch.action.admin.indices.stats.IndexStats;
 import org.elasticsearch.action.admin.indices.stats.ShardStats;
-import org.elasticsearch.client.Client;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.metadata.IndexMetaData;
 import org.elasticsearch.cluster.node.DiscoveryNode;
@@ -44,6 +43,7 @@ import org.elasticsearch.plugins.Plugin;
 import org.elasticsearch.test.ESIntegTestCase;
 import org.elasticsearch.test.ESIntegTestCase.ClusterScope;
 import org.elasticsearch.test.ESIntegTestCase.Scope;
+import org.elasticsearch.test.InternalTestCluster;
 import org.elasticsearch.test.InternalTestCluster.RestartCallback;
 import org.elasticsearch.test.store.MockFSDirectoryService;
 import org.elasticsearch.test.store.MockFSIndexStore;
@@ -51,7 +51,9 @@ import org.elasticsearch.test.store.MockFSIndexStore;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.stream.IntStream;
@@ -75,7 +77,7 @@ public class RecoveryFromGatewayIT extends ESIntegTestCase {
 
     @Override
     protected Collection<Class<? extends Plugin>> nodePlugins() {
-        return pluginList(MockFSIndexStore.TestPlugin.class);
+        return Arrays.asList(MockFSIndexStore.TestPlugin.class);
     }
 
     public void testOneNodeRecoverFromGateway() throws Exception {
@@ -331,48 +333,43 @@ public class RecoveryFromGatewayIT extends ESIntegTestCase {
         String metaDataUuid = client().admin().cluster().prepareState().execute().get().getState().getMetaData().clusterUUID();
         assertThat(metaDataUuid, not(equalTo("_na_")));
 
-        Map<String, long[]> primaryTerms = assertAndCapturePrimaryTerms(null);
-
         logger.info("--> closing first node, and indexing more data to the second node");
-        internalCluster().fullRestart(new RestartCallback() {
+        internalCluster().stopRandomDataNode();
 
-            @Override
-            public void doAfterNodes(int numNodes, Client client) throws Exception {
-                if (numNodes == 1) {
-                    logger.info("--> one node is closed - start indexing data into the second one");
-                    client.prepareIndex("test", "type1", "3").setSource(jsonBuilder().startObject().field("field", "value3").endObject()).execute().actionGet();
-                    // TODO: remove once refresh doesn't fail immediately if there a master block:
-                    // https://github.com/elastic/elasticsearch/issues/9997
-                    client.admin().cluster().prepareHealth("test").setWaitForYellowStatus().get();
-                    client.admin().indices().prepareRefresh().execute().actionGet();
+        logger.info("--> one node is closed - start indexing data into the second one");
+        client().prepareIndex("test", "type1", "3").setSource(jsonBuilder().startObject().field("field", "value3").endObject()).execute().actionGet();
+        // TODO: remove once refresh doesn't fail immediately if there a master block:
+        // https://github.com/elastic/elasticsearch/issues/9997
+        client().admin().cluster().prepareHealth("test").setWaitForYellowStatus().get();
+        client().admin().indices().prepareRefresh().execute().actionGet();
 
-                    for (int i = 0; i < 10; i++) {
-                        assertHitCount(client.prepareSearch().setSize(0).setQuery(matchAllQuery()).execute().actionGet(), 3);
-                    }
+        for (int i = 0; i < 10; i++) {
+            assertHitCount(client().prepareSearch().setSize(0).setQuery(matchAllQuery()).execute().actionGet(), 3);
+        }
 
-                    logger.info("--> add some metadata, additional type and template");
-                    client.admin().indices().preparePutMapping("test").setType("type2")
-                        .setSource(jsonBuilder().startObject().startObject("type2").endObject().endObject())
-                        .execute().actionGet();
-                    client.admin().indices().preparePutTemplate("template_1")
-                        .setTemplate("te*")
-                        .setOrder(0)
-                        .addMapping("type1", XContentFactory.jsonBuilder().startObject().startObject("type1").startObject("properties")
-                            .startObject("field1").field("type", "text").field("store", true).endObject()
-                            .startObject("field2").field("type", "keyword").field("store", true).endObject()
-                            .endObject().endObject().endObject())
-                        .execute().actionGet();
-                    client.admin().indices().prepareAliases().addAlias("test", "test_alias", QueryBuilders.termQuery("field", "value")).execute().actionGet();
-                    logger.info("--> starting two nodes back, verifying we got the latest version");
-                }
+        logger.info("--> add some metadata, additional type and template");
+        client().admin().indices().preparePutMapping("test").setType("type2")
+            .setSource(jsonBuilder().startObject().startObject("type2").endObject().endObject())
+            .execute().actionGet();
+        client().admin().indices().preparePutTemplate("template_1")
+            .setTemplate("te*")
+            .setOrder(0)
+            .addMapping("type1", XContentFactory.jsonBuilder().startObject().startObject("type1").startObject("properties")
+                .startObject("field1").field("type", "text").field("store", true).endObject()
+                .startObject("field2").field("type", "keyword").field("store", true).endObject()
+                .endObject().endObject().endObject())
+            .execute().actionGet();
+        client().admin().indices().prepareAliases().addAlias("test", "test_alias", QueryBuilders.termQuery("field", "value")).execute().actionGet();
 
-            }
+        logger.info("--> stopping the second node");
+        internalCluster().stopRandomDataNode();
 
-        });
+        logger.info("--> starting the two nodes back");
+
+        internalCluster().startNodesAsync(2, Settings.builder().put("gateway.recover_after_nodes", 2).build()).get();
 
         logger.info("--> running cluster_health (wait for the shards to startup)");
         ensureGreen();
-        primaryTerms = assertAndCapturePrimaryTerms(primaryTerms);
 
         assertThat(client().admin().cluster().prepareState().execute().get().getState().getMetaData().clusterUUID(), equalTo(metaDataUuid));
 
@@ -382,7 +379,7 @@ public class RecoveryFromGatewayIT extends ESIntegTestCase {
 
         ClusterState state = client().admin().cluster().prepareState().execute().actionGet().getState();
         assertThat(state.metaData().index("test").mapping("type2"), notNullValue());
-        assertThat(state.metaData().templates().get("template_1").template(), equalTo("te*"));
+        assertThat(state.metaData().templates().get("template_1").patterns(), equalTo(Collections.singletonList("te*")));
         assertThat(state.metaData().index("test").getAliases().get("test_alias"), notNullValue());
         assertThat(state.metaData().index("test").getAliases().get("test_alias").filter(), notNullValue());
     }
@@ -416,7 +413,7 @@ public class RecoveryFromGatewayIT extends ESIntegTestCase {
         logger.info("Running Cluster Health");
         ensureGreen();
         client().admin().indices().prepareForceMerge("test").setMaxNumSegments(100).get(); // just wait for merges
-        client().admin().indices().prepareFlush().setWaitIfOngoing(true).setForce(true).get();
+        client().admin().indices().prepareFlush().setForce(true).get();
 
         boolean useSyncIds = randomBoolean();
         if (useSyncIds == false) {
@@ -500,27 +497,28 @@ public class RecoveryFromGatewayIT extends ESIntegTestCase {
     public void testRecoveryDifferentNodeOrderStartup() throws Exception {
         // we need different data paths so we make sure we start the second node fresh
 
-        final String node_1 = internalCluster().startNode(Settings.builder().put(Environment.PATH_DATA_SETTING.getKey(), createTempDir()).build());
+        final Path pathNode1 = createTempDir();
+        final String node_1 = internalCluster().startNode(Settings.builder().put(Environment.PATH_DATA_SETTING.getKey(), pathNode1).build());
 
         client().prepareIndex("test", "type1", "1").setSource("field", "value").execute().actionGet();
 
-        internalCluster().startNode(Settings.builder().put(Environment.PATH_DATA_SETTING.getKey(), createTempDir()).build());
+        final Path pathNode2 = createTempDir();
+        final String node_2 = internalCluster().startNode(Settings.builder().put(Environment.PATH_DATA_SETTING.getKey(), pathNode2).build());
 
         ensureGreen();
         Map<String, long[]> primaryTerms = assertAndCapturePrimaryTerms(null);
 
-
-        internalCluster().fullRestart(new RestartCallback() {
-
-            @Override
-            public boolean doRestart(String nodeName) {
-                return !node_1.equals(nodeName);
-            }
-        });
-
+        if (randomBoolean()) {
+            internalCluster().stopRandomNode(InternalTestCluster.nameFilter(node_1));
+            internalCluster().stopRandomNode(InternalTestCluster.nameFilter(node_2));
+        } else {
+            internalCluster().stopRandomNode(InternalTestCluster.nameFilter(node_2));
+            internalCluster().stopRandomNode(InternalTestCluster.nameFilter(node_1));
+        }
+        // start the second node again
+        internalCluster().startNode(Settings.builder().put(Environment.PATH_DATA_SETTING.getKey(), pathNode2).build());
         ensureYellow();
         primaryTerms = assertAndCapturePrimaryTerms(primaryTerms);
-
         assertThat(client().admin().indices().prepareExists("test").execute().actionGet().isExists(), equalTo(true));
         assertHitCount(client().prepareSearch("test").setSize(0).setQuery(QueryBuilders.matchAllQuery()).execute().actionGet(), 1);
     }

@@ -45,7 +45,6 @@ import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.settings.Setting;
 import org.elasticsearch.common.settings.Setting.Property;
 import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.common.settings.SettingsModule;
 import org.elasticsearch.index.IndexNotFoundException;
 import org.elasticsearch.plugins.Plugin;
 import org.elasticsearch.test.ESIntegTestCase;
@@ -69,12 +68,11 @@ public class IndicesOptionsIntegrationIT extends ESIntegTestCase {
 
     @Override
     protected Collection<Class<? extends Plugin>> nodePlugins() {
-        return pluginList(TestPlugin.class); //
+        return Arrays.asList(TestPlugin.class);
     }
 
     public void testSpecifiedIndexUnavailableMultipleIndices() throws Exception {
         assertAcked(prepareCreate("test1"));
-        ensureYellow();
 
         // Verify defaults
         verify(search("test1", "test2"), true);
@@ -129,7 +127,6 @@ public class IndicesOptionsIntegrationIT extends ESIntegTestCase {
 
         options = IndicesOptions.strictExpandOpen();
         assertAcked(prepareCreate("test2"));
-        ensureYellow();
         verify(search("test1", "test2").setIndicesOptions(options), false);
         verify(msearch(options, "test1", "test2").setIndicesOptions(options), false);
         verify(clearCache("test1", "test2").setIndicesOptions(options), false);
@@ -247,7 +244,6 @@ public class IndicesOptionsIntegrationIT extends ESIntegTestCase {
         verify(getSettings("test1").setIndicesOptions(options), false);
 
         assertAcked(prepareCreate("test1"));
-        ensureYellow();
 
         options = IndicesOptions.strictExpandOpenAndForbidClosed();
         verify(search("test1").setIndicesOptions(options), false);
@@ -447,22 +443,15 @@ public class IndicesOptionsIntegrationIT extends ESIntegTestCase {
 
     public void testAllMissingStrict() throws Exception {
         createIndex("test1");
-        ensureYellow();
-        try {
+        expectThrows(IndexNotFoundException.class, () ->
             client().prepareSearch("test2")
                     .setQuery(matchAllQuery())
-                    .execute().actionGet();
-            fail("Exception should have been thrown.");
-        } catch (IndexNotFoundException e) {
-        }
+                    .execute().actionGet());
 
-        try {
+        expectThrows(IndexNotFoundException.class, () ->
             client().prepareSearch("test2","test3")
                     .setQuery(matchAllQuery())
-                    .execute().actionGet();
-            fail("Exception should have been thrown.");
-        } catch (IndexNotFoundException e) {
-        }
+                    .execute().actionGet());
 
         //you should still be able to run empty searches without things blowing up
         client().prepareSearch().setQuery(matchAllQuery()).execute().actionGet();
@@ -503,7 +492,6 @@ public class IndicesOptionsIntegrationIT extends ESIntegTestCase {
 
     public void testDeleteIndex() throws Exception {
         createIndex("foobar");
-        ensureYellow();
 
         verify(client().admin().indices().prepareDelete("foo"), true);
         assertThat(client().admin().indices().prepareExists("foobar").get().isExists(), equalTo(true));
@@ -515,7 +503,6 @@ public class IndicesOptionsIntegrationIT extends ESIntegTestCase {
         verify(client().admin().indices().prepareDelete("_all"), false);
 
         createIndex("foo", "foobar", "bar", "barbaz");
-        ensureYellow();
 
         verify(client().admin().indices().prepareDelete("foo*"), false);
         assertThat(client().admin().indices().prepareExists("foo").get().isExists(), equalTo(false));
@@ -534,7 +521,6 @@ public class IndicesOptionsIntegrationIT extends ESIntegTestCase {
 
     public void testPutAlias() throws Exception {
         createIndex("foobar");
-        ensureYellow();
         verify(client().admin().indices().prepareAliases().addAlias("foobar", "foobar_alias"), false);
         assertThat(client().admin().indices().prepareAliasesExist("foobar_alias").setIndices("foobar").get().exists(), equalTo(true));
 
@@ -542,7 +528,6 @@ public class IndicesOptionsIntegrationIT extends ESIntegTestCase {
 
     public void testPutAliasWildcard() throws Exception {
         createIndex("foo", "foobar", "bar", "barbaz");
-        ensureYellow();
 
         verify(client().admin().indices().prepareAliases().addAlias("foo*", "foobar_alias"), false);
         assertThat(client().admin().indices().prepareAliasesExist("foobar_alias").setIndices("foo").get().exists(), equalTo(true));
@@ -563,7 +548,6 @@ public class IndicesOptionsIntegrationIT extends ESIntegTestCase {
         verify(client().admin().indices().preparePutMapping("_all").setType("type1").setSource("field", "type=text"), true);
 
         createIndex("foo", "foobar", "bar", "barbaz");
-        ensureYellow();
 
         verify(client().admin().indices().preparePutMapping("foo").setType("type1").setSource("field", "type=text"), false);
         assertThat(client().admin().indices().prepareGetMappings("foo").get().mappings().get("foo").get("type1"), notNullValue());

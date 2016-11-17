@@ -20,6 +20,7 @@
 package org.elasticsearch.indices.stats;
 
 import org.apache.lucene.util.LuceneTestCase.SuppressCodecs;
+import org.elasticsearch.action.DocWriteResponse;
 import org.elasticsearch.action.admin.cluster.node.stats.NodesStatsResponse;
 import org.elasticsearch.action.admin.indices.stats.CommonStats;
 import org.elasticsearch.action.admin.indices.stats.CommonStatsFlags;
@@ -34,7 +35,6 @@ import org.elasticsearch.action.search.SearchType;
 import org.elasticsearch.cluster.metadata.IndexMetaData;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.io.stream.BytesStreamOutput;
-import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.index.IndexModule;
 import org.elasticsearch.index.IndexSettings;
@@ -290,7 +290,6 @@ public class IndexStatsIT extends ESIntegTestCase {
     public void testNonThrottleStats() throws Exception {
         assertAcked(prepareCreate("test")
                 .setSettings(settingsBuilder()
-                                .put(IndexStore.INDEX_STORE_THROTTLE_TYPE_SETTING.getKey(), "merge")
                                 .put(IndexMetaData.SETTING_NUMBER_OF_SHARDS, "1")
                                 .put(IndexMetaData.SETTING_NUMBER_OF_REPLICAS, "0")
                                 .put(MergePolicyConfig.INDEX_MERGE_POLICY_MAX_MERGE_AT_ONCE_SETTING.getKey(), "2")
@@ -322,7 +321,6 @@ public class IndexStatsIT extends ESIntegTestCase {
     public void testThrottleStats() throws Exception {
         assertAcked(prepareCreate("test")
                     .setSettings(settingsBuilder()
-                                 .put(IndexStore.INDEX_STORE_THROTTLE_TYPE_SETTING.getKey(), "merge")
                                  .put(IndexMetaData.SETTING_NUMBER_OF_SHARDS, "1")
                                  .put(IndexMetaData.SETTING_NUMBER_OF_REPLICAS, "0")
                                  .put(MergePolicyConfig.INDEX_MERGE_POLICY_MAX_MERGE_AT_ONCE_SETTING.getKey(), "2")
@@ -489,11 +487,11 @@ public class IndexStatsIT extends ESIntegTestCase {
         } catch (VersionConflictEngineException e) {}
 
         stats = client().admin().indices().prepareStats().setTypes("type1", "type2").execute().actionGet();
-        assertThat(stats.getIndex("test1").getTotal().getIndexing().getTotal().getIndexFailedCount(), equalTo(2L));
-        assertThat(stats.getIndex("test2").getTotal().getIndexing().getTotal().getIndexFailedCount(), equalTo(1L));
+        assertThat(stats.getIndex("test1").getPrimaries().getIndexing().getTotal().getIndexFailedCount(), equalTo(2L));
+        assertThat(stats.getIndex("test2").getPrimaries().getIndexing().getTotal().getIndexFailedCount(), equalTo(1L));
         assertThat(stats.getPrimaries().getIndexing().getTypeStats().get("type1").getIndexFailedCount(), equalTo(1L));
         assertThat(stats.getPrimaries().getIndexing().getTypeStats().get("type2").getIndexFailedCount(), equalTo(1L));
-        assertThat(stats.getTotal().getIndexing().getTotal().getIndexFailedCount(), equalTo(3L));
+        assertThat(stats.getPrimaries().getIndexing().getTotal().getIndexFailedCount(), equalTo(3L));
     }
 
     public void testMergeStats() {
@@ -647,7 +645,7 @@ public class IndexStatsIT extends ESIntegTestCase {
             flags.writeTo(out);
             out.close();
             BytesReference bytes = out.bytes();
-            CommonStatsFlags readStats = CommonStatsFlags.readCommonStatsFlags(StreamInput.wrap(bytes));
+            CommonStatsFlags readStats = new CommonStatsFlags(bytes.streamInput());
             for (Flag flag : values) {
                 assertThat(flags.isSet(flag), equalTo(readStats.isSet(flag)));
             }
@@ -661,7 +659,7 @@ public class IndexStatsIT extends ESIntegTestCase {
             flags.writeTo(out);
             out.close();
             BytesReference bytes = out.bytes();
-            CommonStatsFlags readStats = CommonStatsFlags.readCommonStatsFlags(StreamInput.wrap(bytes));
+            CommonStatsFlags readStats = new CommonStatsFlags(bytes.streamInput());
             for (Flag flag : values) {
                 assertThat(flags.isSet(flag), equalTo(readStats.isSet(flag)));
             }
@@ -1036,8 +1034,8 @@ public class IndexStatsIT extends ESIntegTestCase {
             assertThat(stats.getTotal().queryCache.getCacheSize(), greaterThan(0L));
         });
 
-        assertTrue(client().prepareDelete("index", "type", "1").get().isFound());
-        assertTrue(client().prepareDelete("index", "type", "2").get().isFound());
+        assertEquals(DocWriteResponse.Result.DELETED, client().prepareDelete("index", "type", "1").get().getResult());
+        assertEquals(DocWriteResponse.Result.DELETED, client().prepareDelete("index", "type", "2").get().getResult());
         refresh();
         response = client().admin().indices().prepareStats("index").setQueryCache(true).get();
         assertCumulativeQueryCacheStats(response);

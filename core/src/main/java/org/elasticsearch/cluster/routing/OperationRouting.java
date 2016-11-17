@@ -68,11 +68,6 @@ public class OperationRouting extends AbstractComponent {
         return preferenceActiveShardIterator(indexShard, clusterState.nodes().getLocalNodeId(), clusterState.nodes(), preference);
     }
 
-    public int searchShardsCount(ClusterState clusterState, String[] concreteIndices, @Nullable Map<String, Set<String>> routing) {
-        final Set<IndexShardRoutingTable> shards = computeTargetedShards(clusterState, concreteIndices, routing);
-        return shards.size();
-    }
-
     public GroupShardsIterator searchShards(ClusterState clusterState, String[] concreteIndices, @Nullable Map<String, Set<String>> routing, @Nullable String preference) {
         final Set<IndexShardRoutingTable> shards = computeTargetedShards(clusterState, concreteIndices, routing);
         final Set<ShardIterator> set = new HashSet<>(shards.size());
@@ -126,7 +121,7 @@ public class OperationRouting extends AbstractComponent {
             Preference preferenceType = Preference.parse(preference);
             if (preferenceType == Preference.SHARDS) {
                 // starts with _shards, so execute on specific ones
-                int index = preference.indexOf(';');
+                int index = preference.indexOf('|');
 
                 String shards;
                 if (index == -1) {
@@ -229,11 +224,4 @@ public class OperationRouting extends AbstractComponent {
         // of original index to hash documents
         return Math.floorMod(hash, indexMetaData.getRoutingNumShards()) / indexMetaData.getRoutingFactor();
     }
-
-    private void ensureNodeIdExists(DiscoveryNodes nodes, String nodeId) {
-        if (!nodes.getDataNodes().keys().contains(nodeId)) {
-            throw new IllegalArgumentException("No data node with id[" + nodeId + "] found");
-        }
-    }
-
 }

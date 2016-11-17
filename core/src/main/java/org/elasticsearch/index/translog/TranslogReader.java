@@ -113,7 +113,8 @@ public class TranslogReader extends BaseTranslogReader implements Closeable {
                         headerStream.read(ref.bytes, ref.offset, ref.length);
                         BytesRef uuidBytes = new BytesRef(translogUUID);
                         if (uuidBytes.bytesEquals(ref) == false) {
-                            throw new TranslogCorruptedException("expected shard UUID [" + uuidBytes + "] but got: [" + ref + "] this translog file belongs to a different translog. path:" + path);
+                            throw new TranslogCorruptedException("expected shard UUID " + uuidBytes + " but got: " + ref +
+                                            " this translog file belongs to a different translog. path:" + path);
                         }
                         return new TranslogReader(checkpoint.generation, channel, path, ref.length + CodecUtil.headerLength(TranslogWriter.TRANSLOG_CODEC) + Integer.BYTES, checkpoint.offset, checkpoint.numOps);
                     default:
@@ -148,10 +149,6 @@ public class TranslogReader extends BaseTranslogReader implements Closeable {
             throw new IOException("read requested before position of first ops. pos [" + position + "] first op on: [" + firstOperationOffset + "]");
         }
         Channels.readFromFileChannelWithEofException(channel, position, buffer);
-    }
-
-    public Checkpoint getInfo() {
-        return new Checkpoint(length, totalOperations, getGeneration());
     }
 
     @Override

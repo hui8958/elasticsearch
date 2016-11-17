@@ -31,9 +31,6 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
-/**
- *
- */
 public abstract class AdapterActionFuture<T, L> extends BaseFuture<T> implements ActionFuture<T>, ActionListener<L> {
 
     @Override
@@ -98,7 +95,7 @@ public abstract class AdapterActionFuture<T, L> extends BaseFuture<T> implements
     }
 
     @Override
-    public void onFailure(Throwable e) {
+    public void onFailure(Exception e) {
         setException(e);
     }
 

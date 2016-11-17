@@ -25,6 +25,7 @@ import org.apache.lucene.queries.ExtendedCommonTermsQuery;
 import org.apache.lucene.search.BooleanClause;
 import org.apache.lucene.search.BooleanClause.Occur;
 import org.apache.lucene.search.BooleanQuery;
+import org.apache.lucene.search.BoostQuery;
 import org.apache.lucene.search.FuzzyQuery;
 import org.apache.lucene.search.MultiPhraseQuery;
 import org.apache.lucene.search.MultiTermQuery;
@@ -37,6 +38,7 @@ import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.io.stream.Writeable;
+import org.elasticsearch.common.lucene.all.AllTermQuery;
 import org.elasticsearch.common.lucene.search.MultiPhrasePrefixQuery;
 import org.elasticsearch.common.lucene.search.Queries;
 import org.elasticsearch.common.unit.Fuzziness;
@@ -204,7 +206,7 @@ public class MatchQuery {
             }
             return context.getMapperService().searchAnalyzer();
         } else {
-            Analyzer analyzer = context.getMapperService().analysisService().analyzer(this.analyzer);
+            Analyzer analyzer = context.getMapperService().getIndexAnalyzers().get(this.analyzer);
             if (analyzer == null) {
                 throw new IllegalArgumentException("No analyzer found for [" + this.analyzer + "]");
             }
@@ -280,7 +282,6 @@ public class MatchQuery {
         if (zeroTermsQuery == DEFAULT_ZERO_TERMS_QUERY) {
             return Queries.newMatchNoDocsQuery("Matching no documents because no terms present.");
         }
-
         return Queries.newMatchAllQuery();
     }
 
@@ -303,28 +304,38 @@ public class MatchQuery {
 
         public Query createPhrasePrefixQuery(String field, String queryText, int phraseSlop, int maxExpansions) {
             final Query query = createFieldQuery(getAnalyzer(), Occur.MUST, field, queryText, true, phraseSlop);
+            float boost = 1;
+            Query innerQuery = query;
+            while (innerQuery instanceof BoostQuery) {
+                BoostQuery bq = (BoostQuery) innerQuery;
+                boost *= bq.getBoost();
+                innerQuery = bq.getQuery();
+            }
             final MultiPhrasePrefixQuery prefixQuery = new MultiPhrasePrefixQuery();
             prefixQuery.setMaxExpansions(maxExpansions);
             prefixQuery.setSlop(phraseSlop);
-            if (query instanceof PhraseQuery) {
-                PhraseQuery pq = (PhraseQuery)query;
+            if (innerQuery instanceof PhraseQuery) {
+                PhraseQuery pq = (PhraseQuery) innerQuery;
                 Term[] terms = pq.getTerms();
                 int[] positions = pq.getPositions();
                 for (int i = 0; i < terms.length; i++) {
                     prefixQuery.add(new Term[] {terms[i]}, positions[i]);
                 }
-                return prefixQuery;
-            } else if (query instanceof MultiPhraseQuery) {
-                MultiPhraseQuery pq = (MultiPhraseQuery)query;
+                return boost == 1 ? prefixQuery : new BoostQuery(prefixQuery, boost);
+            } else if (innerQuery instanceof MultiPhraseQuery) {
+                MultiPhraseQuery pq = (MultiPhraseQuery) innerQuery;
                 Term[][] terms = pq.getTermArrays();
                 int[] positions = pq.getPositions();
                 for (int i = 0; i < terms.length; i++) {
                     prefixQuery.add(terms[i], positions[i]);
                 }
-                return prefixQuery;
-            } else if (query instanceof TermQuery) {
-                prefixQuery.add(((TermQuery) query).getTerm());
-                return prefixQuery;
+                return boost == 1 ? prefixQuery : new BoostQuery(prefixQuery, boost);
+            } else if (innerQuery instanceof TermQuery) {
+                prefixQuery.add(((TermQuery) innerQuery).getTerm());
+                return boost == 1 ? prefixQuery : new BoostQuery(prefixQuery, boost);
+            } else if (innerQuery instanceof AllTermQuery) {
+                prefixQuery.add(((AllTermQuery) innerQuery).getTerm());
+                return boost == 1 ? prefixQuery : new BoostQuery(prefixQuery, boost);
             }
             return query;
         }

@@ -28,7 +28,7 @@ import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 
-import static org.elasticsearch.action.index.IndexRequest.OpType.CREATE;
+import static org.elasticsearch.action.DocWriteRequest.OpType.CREATE;
 import static org.hamcrest.Matchers.both;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.either;
@@ -61,7 +61,7 @@ public class ReindexFailureTests extends ReindexTestCase {
         assertThat(response, matcher()
                 .batches(1)
                 .failures(both(greaterThan(0)).and(lessThanOrEqualTo(maximumNumberOfShards()))));
-        for (Failure failure: response.getIndexingFailures()) {
+        for (Failure failure: response.getBulkFailures()) {
             assertThat(failure.getMessage(), containsString("NumberFormatException[For input string: \"words words\"]"));
         }
     }
@@ -79,7 +79,7 @@ public class ReindexFailureTests extends ReindexTestCase {
 
         BulkIndexByScrollResponse response = copy.get();
         assertThat(response, matcher().batches(1).versionConflicts(1).failures(1).created(99));
-        for (Failure failure: response.getIndexingFailures()) {
+        for (Failure failure: response.getBulkFailures()) {
             assertThat(failure.getMessage(), containsString("VersionConflictEngineException[[test]["));
         }
     }
@@ -108,7 +108,11 @@ public class ReindexFailureTests extends ReindexTestCase {
                 attempt++;
             } catch (ExecutionException e) {
                 logger.info("Triggered a reindex failure on the {} attempt", attempt);
-                assertThat(e.getMessage(), either(containsString("all shards failed")).or(containsString("No search context found")));
+                assertThat(e.getMessage(),
+                        either(containsString("all shards failed"))
+                        .or(containsString("No search context found"))
+                        .or(containsString("no such index"))
+                        );
                 return;
             }
         }

@@ -25,9 +25,6 @@ import org.elasticsearch.tasks.TaskManager;
 import java.io.IOException;
 import java.util.function.Supplier;
 
-/**
- *
- */
 public class RequestHandlerRegistry<Request extends TransportRequest> {
 
     private final String action;
@@ -118,9 +115,9 @@ public class RequestHandlerRegistry<Request extends TransportRequest> {
         }
 
         @Override
-        public void sendResponse(Throwable error) throws IOException {
+        public void sendResponse(Exception exception) throws IOException {
             endTask();
-            super.sendResponse(error);
+            super.sendResponse(exception);
         }
 
         private void endTask() {

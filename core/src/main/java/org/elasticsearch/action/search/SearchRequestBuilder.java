@@ -31,7 +31,7 @@ import org.elasticsearch.search.aggregations.AggregationBuilder;
 import org.elasticsearch.search.aggregations.PipelineAggregationBuilder;
 import org.elasticsearch.search.slice.SliceBuilder;
 import org.elasticsearch.search.builder.SearchSourceBuilder;
-import org.elasticsearch.search.highlight.HighlightBuilder;
+import org.elasticsearch.search.fetch.subphase.highlight.HighlightBuilder;
 import org.elasticsearch.search.rescore.RescoreBuilder;
 import org.elasticsearch.search.sort.SortBuilder;
 import org.elasticsearch.search.sort.SortOrder;
@@ -250,14 +250,6 @@ public class SearchRequestBuilder extends ActionRequestBuilder<SearchRequest, Se
     }
 
     /**
-     * Sets no fields to be loaded, resulting in only id and type to be returned per field.
-     */
-    public SearchRequestBuilder setNoFields() {
-        sourceBuilder().noFields();
-        return this;
-    }
-
-    /**
      * Indicates whether the response should contain the stored _source for every hit
      */
     public SearchRequestBuilder setFetchSource(boolean fetch) {
@@ -289,13 +281,22 @@ public class SearchRequestBuilder extends ActionRequestBuilder<SearchRequest, Se
         return this;
     }
 
+    /**
+     * Adds a docvalue based field to load and return. The field does not have to be stored,
+     * but its recommended to use non analyzed or numeric fields.
+     *
+     * @param name The field to get from the docvalue
+     */
+    public SearchRequestBuilder addDocValueField(String name) {
+        sourceBuilder().docValueField(name);
+        return this;
+    }
 
     /**
-     * Adds a field to load and return (note, it must be stored) as part of the search request.
-     * If none are specified, the source of the document will be return.
+     * Adds a stored field to load and return (note, it must be stored) as part of the search request.
      */
-    public SearchRequestBuilder addField(String field) {
-        sourceBuilder().field(field);
+    public SearchRequestBuilder addStoredField(String field) {
+        sourceBuilder().storedField(field);
         return this;
     }
 
@@ -304,11 +305,14 @@ public class SearchRequestBuilder extends ActionRequestBuilder<SearchRequest, Se
      * but its recommended to use non analyzed or numeric fields.
      *
      * @param name The field to get from the field data cache
+     * @deprecated Use {@link SearchRequestBuilder#addDocValueField(String)} instead.
      */
+    @Deprecated
     public SearchRequestBuilder addFieldDataField(String name) {
-        sourceBuilder().fieldDataField(name);
+        sourceBuilder().docValueField(name);
         return this;
     }
+
 
     /**
      * Adds a script based field to load and return. The field does not have to be stored,
@@ -367,11 +371,22 @@ public class SearchRequestBuilder extends ActionRequestBuilder<SearchRequest, Se
     }
 
     /**
-     * Sets the fields to load and return as part of the search request. If none
-     * are specified, the source of the document will be returned.
+     * Adds stored fields to load and return (note, it must be stored) as part of the search request.
+     * To disable the stored fields entirely (source and metadata fields) use {@code storedField("_none_")}.
+     * @deprecated Use {@link SearchRequestBuilder#storedFields(String...)} instead.
      */
+    @Deprecated
     public SearchRequestBuilder fields(String... fields) {
-        sourceBuilder().fields(Arrays.asList(fields));
+        sourceBuilder().storedFields(Arrays.asList(fields));
+        return this;
+    }
+
+    /**
+     * Adds stored fields to load and return (note, it must be stored) as part of the search request.
+     * To disable the stored fields entirely (source and metadata fields) use {@code storedField("_none_")}.
+     */
+    public SearchRequestBuilder storedFields(String... fields) {
+        sourceBuilder().storedFields(Arrays.asList(fields));
         return this;
     }
 

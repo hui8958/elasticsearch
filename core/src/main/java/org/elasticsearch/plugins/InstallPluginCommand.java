@@ -29,7 +29,7 @@ import org.elasticsearch.bootstrap.JarHell;
 import org.elasticsearch.cli.ExitCodes;
 import org.elasticsearch.cli.SettingCommand;
 import org.elasticsearch.cli.Terminal;
-import org.elasticsearch.cli.UserError;
+import org.elasticsearch.cli.UserException;
 import org.elasticsearch.common.collect.Tuple;
 import org.elasticsearch.common.hash.MessageDigests;
 import org.elasticsearch.common.io.FileSystemUtils;
@@ -142,29 +142,31 @@ class InstallPluginCommand extends SettingCommand {
     private final OptionSpec<Void> batchOption;
     private final OptionSpec<String> arguments;
 
-
-    public static final Set<PosixFilePermission> DIR_AND_EXECUTABLE_PERMS;
-    public static final Set<PosixFilePermission> FILE_PERMS;
+    static final Set<PosixFilePermission> BIN_DIR_PERMS;
+    static final Set<PosixFilePermission> BIN_FILES_PERMS;
+    static final Set<PosixFilePermission> CONFIG_DIR_PERMS;
+    static final Set<PosixFilePermission> CONFIG_FILES_PERMS;
+    static final Set<PosixFilePermission> PLUGIN_DIR_PERMS;
+    static final Set<PosixFilePermission> PLUGIN_FILES_PERMS;
 
     static {
-        Set<PosixFilePermission> dirAndExecutablePerms = new HashSet<>(7);
-        // Directories and executables get chmod 755
-        dirAndExecutablePerms.add(PosixFilePermission.OWNER_EXECUTE);
-        dirAndExecutablePerms.add(PosixFilePermission.OWNER_READ);
-        dirAndExecutablePerms.add(PosixFilePermission.OWNER_WRITE);
-        dirAndExecutablePerms.add(PosixFilePermission.GROUP_EXECUTE);
-        dirAndExecutablePerms.add(PosixFilePermission.GROUP_READ);
-        dirAndExecutablePerms.add(PosixFilePermission.OTHERS_READ);
-        dirAndExecutablePerms.add(PosixFilePermission.OTHERS_EXECUTE);
-        DIR_AND_EXECUTABLE_PERMS = Collections.unmodifiableSet(dirAndExecutablePerms);
+        // Bin directory get chmod 755
+        BIN_DIR_PERMS = Collections.unmodifiableSet(PosixFilePermissions.fromString("rwxr-xr-x"));
 
-        Set<PosixFilePermission> filePerms = new HashSet<>(4);
-        // Files get chmod 644
-        filePerms.add(PosixFilePermission.OWNER_READ);
-        filePerms.add(PosixFilePermission.OWNER_WRITE);
-        filePerms.add(PosixFilePermission.GROUP_READ);
-        filePerms.add(PosixFilePermission.OTHERS_READ);
-        FILE_PERMS = Collections.unmodifiableSet(filePerms);
+        // Bin files also get chmod 755
+        BIN_FILES_PERMS = BIN_DIR_PERMS;
+
+        // Config directory get chmod 750
+        CONFIG_DIR_PERMS = Collections.unmodifiableSet(PosixFilePermissions.fromString("rwxr-x---"));
+
+        // Config files get chmod 660
+        CONFIG_FILES_PERMS = Collections.unmodifiableSet(PosixFilePermissions.fromString("rw-rw----"));
+
+        // Plugin directory get chmod 755
+        PLUGIN_DIR_PERMS = BIN_DIR_PERMS;
+
+        // Plugins files get chmod 644
+        PLUGIN_FILES_PERMS = Collections.unmodifiableSet(PosixFilePermissions.fromString("rw-r--r--"));
     }
 
     InstallPluginCommand() {
@@ -185,18 +187,16 @@ class InstallPluginCommand extends SettingCommand {
 
     @Override
     protected void execute(Terminal terminal, OptionSet options, Map<String, String> settings) throws Exception {
-        // TODO: in jopt-simple 5.0 we can enforce a min/max number of positional args
-        List<String> args = arguments.values(options);
-        if (args.size() != 1) {
-            throw new UserError(ExitCodes.USAGE, "Must supply a single plugin id argument");
-        }
-        String pluginId = args.get(0);
+        String pluginId = arguments.value(options);
         boolean isBatch = options.has(batchOption) || System.console() == null;
         execute(terminal, pluginId, isBatch, settings);
     }
 
     // pkg private for testing
     void execute(Terminal terminal, String pluginId, boolean isBatch, Map<String, String> settings) throws Exception {
+        if (pluginId == null) {
+            throw new UserException(ExitCodes.USAGE, "plugin id is required");
+        }
         final Environment env = InternalSettingsPreparer.prepareEnvironment(Settings.EMPTY, terminal, settings);
         // TODO: remove this leniency!! is it needed anymore?
         if (Files.exists(env.pluginsFile()) == false) {
@@ -216,18 +216,13 @@ class InstallPluginCommand extends SettingCommand {
             final String url;
             final String stagingHash = System.getProperty(PROPERTY_STAGING_ID);
             if (stagingHash != null) {
-                url = String.format(
-                        Locale.ROOT,
-                        "https://download.elastic.co/elasticsearch/staging/%1$s-%2$s/org/elasticsearch/plugin/%3$s/%1$s/%3$s-%1$s.zip",
-                        version,
-                        stagingHash,
-                        pluginId);
+                url = String.format(Locale.ROOT,
+                    "https://staging.elastic.co/%3$s-%1$s/downloads/elasticsearch-plugins/%2$s/%2$s-%3$s.zip",
+                    stagingHash, pluginId, version);
             } else {
-                url = String.format(
-                        Locale.ROOT,
-                        "https://download.elastic.co/elasticsearch/release/org/elasticsearch/plugin/%1$s/%2$s/%1$s-%2$s.zip",
-                        pluginId,
-                        version);
+                url = String.format(Locale.ROOT,
+                    "https://artifacts.elastic.co/downloads/elasticsearch-plugins/%1$s/%1$s-%2$s.zip",
+                    pluginId, version);
             }
             terminal.println("-> Downloading " + pluginId + " from elastic");
             return downloadZipAndChecksum(terminal, url, tmpDir);
@@ -250,7 +245,7 @@ class InstallPluginCommand extends SettingCommand {
             if (plugins.isEmpty() == false) {
                 msg += ", did you mean " + (plugins.size() == 1 ? "[" + plugins.get(0) + "]": "any of " + plugins.toString()) + "?";
             }
-            throw new UserError(ExitCodes.USAGE, msg);
+            throw new UserException(ExitCodes.USAGE, msg);
         }
         terminal.println("-> Downloading " + URLDecoder.decode(pluginId, "UTF-8"));
         return downloadZip(terminal, pluginId, tmpDir);
@@ -276,6 +271,7 @@ class InstallPluginCommand extends SettingCommand {
         URL url = new URL(urlString);
         Path zip = Files.createTempFile(tmpDir, null, ".zip");
         URLConnection urlConnection = url.openConnection();
+        urlConnection.addRequestProperty("User-Agent", "elasticsearch-plugin-installer");
         int contentLength = urlConnection.getContentLength();
         try (InputStream in = new TerminalProgressInputStream(urlConnection.getInputStream(), contentLength, terminal)) {
             // must overwrite since creating the temp file above actually created the file
@@ -328,20 +324,20 @@ class InstallPluginCommand extends SettingCommand {
             BufferedReader checksumReader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8));
             expectedChecksum = checksumReader.readLine();
             if (checksumReader.readLine() != null) {
-                throw new UserError(ExitCodes.IO_ERROR, "Invalid checksum file at " + checksumUrl);
+                throw new UserException(ExitCodes.IO_ERROR, "Invalid checksum file at " + checksumUrl);
             }
         }
 
         byte[] zipbytes = Files.readAllBytes(zip);
         String gotChecksum = MessageDigests.toHexString(MessageDigests.sha1().digest(zipbytes));
         if (expectedChecksum.equals(gotChecksum) == false) {
-            throw new UserError(ExitCodes.IO_ERROR, "SHA1 mismatch, expected " + expectedChecksum + " but got " + gotChecksum);
+            throw new UserException(ExitCodes.IO_ERROR, "SHA1 mismatch, expected " + expectedChecksum + " but got " + gotChecksum);
         }
 
         return zip;
     }
 
-    private Path unzip(Path zip, Path pluginsDir) throws IOException, UserError {
+    private Path unzip(Path zip, Path pluginsDir) throws IOException, UserException {
         // unzip plugin to a staging temp dir
 
         final Path target = stagingDirectory(pluginsDir);
@@ -386,14 +382,14 @@ class InstallPluginCommand extends SettingCommand {
         Files.delete(zip);
         if (hasEsDir == false) {
             IOUtils.rm(target);
-            throw new UserError(ExitCodes.DATA_ERROR, "`elasticsearch` directory is missing in the plugin zip");
+            throw new UserException(ExitCodes.DATA_ERROR, "`elasticsearch` directory is missing in the plugin zip");
         }
         return target;
     }
 
     private Path stagingDirectory(Path pluginsDir) throws IOException {
         try {
-            return Files.createTempDirectory(pluginsDir, ".installing-", PosixFilePermissions.asFileAttribute(DIR_AND_EXECUTABLE_PERMS));
+            return Files.createTempDirectory(pluginsDir, ".installing-", PosixFilePermissions.asFileAttribute(PLUGIN_DIR_PERMS));
         } catch (IllegalArgumentException e) {
             // Jimfs throws an IAE where it should throw an UOE
             // remove when google/jimfs#30 is integrated into Jimfs
@@ -422,10 +418,11 @@ class InstallPluginCommand extends SettingCommand {
         PluginInfo info = PluginInfo.readFromProperties(pluginRoot);
         terminal.println(VERBOSE, info.toString());
 
-        // don't let luser install plugin as a module...
+        // don't let user install plugin as a module...
         // they might be unavoidably in maven central and are packaged up the same way)
         if (MODULES.contains(info.getName())) {
-            throw new UserError(ExitCodes.USAGE, "plugin '" + info.getName() + "' cannot be installed like this, it is a system module");
+            throw new UserException(
+                    ExitCodes.USAGE, "plugin '" + info.getName() + "' cannot be installed like this, it is a system module");
         }
 
         // check for jar hell before any copying
@@ -475,7 +472,7 @@ class InstallPluginCommand extends SettingCommand {
 
             final Path destination = env.pluginsFile().resolve(info.getName());
             if (Files.exists(destination)) {
-                throw new UserError(
+                throw new UserException(
                     ExitCodes.USAGE,
                     "plugin directory " + destination.toAbsolutePath() +
                         " already exists. To update the plugin, uninstall it first using 'remove " + info.getName() + "' command");
@@ -499,9 +496,9 @@ class InstallPluginCommand extends SettingCommand {
             try (DirectoryStream<Path> stream = Files.newDirectoryStream(destination)) {
                 for (Path pluginFile : stream) {
                     if (Files.isDirectory(pluginFile)) {
-                        setFileAttributes(pluginFile, DIR_AND_EXECUTABLE_PERMS);
+                        setFileAttributes(pluginFile, PLUGIN_DIR_PERMS);
                     } else {
-                        setFileAttributes(pluginFile, FILE_PERMS);
+                        setFileAttributes(pluginFile, PLUGIN_FILES_PERMS);
                     }
                 }
             }
@@ -520,22 +517,22 @@ class InstallPluginCommand extends SettingCommand {
     /** Copies the files from {@code tmpBinDir} into {@code destBinDir}, along with permissions from dest dirs parent. */
     private void installBin(PluginInfo info, Path tmpBinDir, Path destBinDir) throws Exception {
         if (Files.isDirectory(tmpBinDir) == false) {
-            throw new UserError(ExitCodes.IO_ERROR, "bin in plugin " + info.getName() + " is not a directory");
+            throw new UserException(ExitCodes.IO_ERROR, "bin in plugin " + info.getName() + " is not a directory");
         }
         Files.createDirectory(destBinDir);
-        setFileAttributes(destBinDir, DIR_AND_EXECUTABLE_PERMS);
+        setFileAttributes(destBinDir, BIN_DIR_PERMS);
 
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(tmpBinDir)) {
             for (Path srcFile : stream) {
                 if (Files.isDirectory(srcFile)) {
-                    throw new UserError(
+                    throw new UserException(
                         ExitCodes.DATA_ERROR,
                         "Directories not allowed in bin dir for plugin " + info.getName() + ", found " + srcFile.getFileName());
                 }
 
                 Path destFile = destBinDir.resolve(tmpBinDir.relativize(srcFile));
                 Files.copy(srcFile, destFile);
-                setFileAttributes(destFile, DIR_AND_EXECUTABLE_PERMS);
+                setFileAttributes(destFile, BIN_FILES_PERMS);
             }
         }
         IOUtils.rm(tmpBinDir); // clean up what we just copied
@@ -547,11 +544,11 @@ class InstallPluginCommand extends SettingCommand {
      */
     private void installConfig(PluginInfo info, Path tmpConfigDir, Path destConfigDir) throws Exception {
         if (Files.isDirectory(tmpConfigDir) == false) {
-            throw new UserError(ExitCodes.IO_ERROR, "config in plugin " + info.getName() + " is not a directory");
+            throw new UserException(ExitCodes.IO_ERROR, "config in plugin " + info.getName() + " is not a directory");
         }
 
         Files.createDirectories(destConfigDir);
-        setFileAttributes(destConfigDir, DIR_AND_EXECUTABLE_PERMS);
+        setFileAttributes(destConfigDir, CONFIG_DIR_PERMS);
         final PosixFileAttributeView destConfigDirAttributesView =
             Files.getFileAttributeView(destConfigDir.getParent(), PosixFileAttributeView.class);
         final PosixFileAttributes destConfigDirAttributes =
@@ -563,13 +560,13 @@ class InstallPluginCommand extends SettingCommand {
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(tmpConfigDir)) {
             for (Path srcFile : stream) {
                 if (Files.isDirectory(srcFile)) {
-                    throw new UserError(ExitCodes.DATA_ERROR, "Directories not allowed in config dir for plugin " + info.getName());
+                    throw new UserException(ExitCodes.DATA_ERROR, "Directories not allowed in config dir for plugin " + info.getName());
                 }
 
                 Path destFile = destConfigDir.resolve(tmpConfigDir.relativize(srcFile));
                 if (Files.exists(destFile) == false) {
                     Files.copy(srcFile, destFile);
-                    setFileAttributes(destFile, FILE_PERMS);
+                    setFileAttributes(destFile, CONFIG_FILES_PERMS);
                     if (destConfigDirAttributes != null) {
                         setOwnerGroup(destFile, destConfigDirAttributes);
                     }

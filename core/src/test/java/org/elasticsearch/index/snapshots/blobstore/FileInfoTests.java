@@ -21,6 +21,7 @@ package org.elasticsearch.index.snapshots.blobstore;
 import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.Version;
 import org.elasticsearch.ElasticsearchParseException;
+import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.unit.ByteSizeValue;
 import org.elasticsearch.common.xcontent.ToXContent;
 import org.elasticsearch.common.xcontent.XContentBuilder;
@@ -36,8 +37,6 @@ import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.is;
 
-/**
- */
 public class FileInfoTests extends ESTestCase {
     public void testToFromXContent() throws IOException {
         final int iters = scaledRandomIntBetween(1, 10);
@@ -52,7 +51,7 @@ public class FileInfoTests extends ESTestCase {
             BlobStoreIndexShardSnapshot.FileInfo info = new BlobStoreIndexShardSnapshot.FileInfo("_foobar", meta, size);
             XContentBuilder builder = XContentFactory.contentBuilder(XContentType.JSON).prettyPrint();
             BlobStoreIndexShardSnapshot.FileInfo.toXContent(info, builder, ToXContent.EMPTY_PARAMS);
-            byte[] xcontent = shuffleXContent(builder).bytes().toBytes();
+            byte[] xcontent = BytesReference.toBytes(shuffleXContent(builder).bytes());
 
             final BlobStoreIndexShardSnapshot.FileInfo parsedInfo;
             try (XContentParser parser = XContentFactory.xContent(XContentType.JSON).createParser(xcontent)) {
@@ -111,7 +110,7 @@ public class FileInfoTests extends ESTestCase {
             builder.field(FileInfo.WRITTEN_BY, Version.LATEST.toString());
             builder.field(FileInfo.CHECKSUM, "666");
             builder.endObject();
-            byte[] xContent = builder.bytes().toBytes();
+            byte[] xContent = BytesReference.toBytes(builder.bytes());
 
             if (failure == null) {
                 // No failures should read as usual

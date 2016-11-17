@@ -35,6 +35,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.Reader;
+import java.util.Set;
 
 /**
  * A CBOR based content implementation using Jackson.
@@ -45,8 +46,8 @@ public class CborXContent implements XContent {
         return XContentBuilder.builder(cborXContent);
     }
 
-    final static CBORFactory cborFactory;
-    public final static CborXContent cborXContent;
+    static final CBORFactory cborFactory;
+    public static final CborXContent cborXContent;
 
     static {
         cborFactory = new CBORFactory();
@@ -70,8 +71,8 @@ public class CborXContent implements XContent {
     }
 
     @Override
-    public XContentGenerator createGenerator(OutputStream os, String[] filters, boolean inclusive) throws IOException {
-        return new CborXContentGenerator(cborFactory.createGenerator(os, JsonEncoding.UTF8), os, filters, inclusive);
+    public XContentGenerator createGenerator(OutputStream os, Set<String> includes, Set<String> excludes) throws IOException {
+        return new CborXContentGenerator(cborFactory.createGenerator(os, JsonEncoding.UTF8), os, includes, excludes);
     }
 
     @Override
@@ -96,9 +97,6 @@ public class CborXContent implements XContent {
 
     @Override
     public XContentParser createParser(BytesReference bytes) throws IOException {
-        if (bytes.hasArray()) {
-            return createParser(bytes.array(), bytes.arrayOffset(), bytes.length());
-        }
         return createParser(bytes.streamInput());
     }
 

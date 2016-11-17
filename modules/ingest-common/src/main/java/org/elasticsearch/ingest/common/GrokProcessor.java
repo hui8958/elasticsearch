@@ -20,9 +20,9 @@
 package org.elasticsearch.ingest.common;
 
 import org.elasticsearch.ingest.AbstractProcessor;
-import org.elasticsearch.ingest.AbstractProcessorFactory;
 import org.elasticsearch.ingest.ConfigurationUtils;
 import org.elasticsearch.ingest.IngestDocument;
+import org.elasticsearch.ingest.Processor;
 
 import java.util.HashMap;
 import java.util.List;
@@ -37,23 +37,31 @@ public final class GrokProcessor extends AbstractProcessor {
     private static final String PATTERN_MATCH_KEY = "_ingest._grok_match_index";
 
     private final String matchField;
+    private final List<String> matchPatterns;
     private final Grok grok;
     private final boolean traceMatch;
+    private final boolean ignoreMissing;
 
-    public GrokProcessor(String tag, Map<String, String> patternBank, List<String> matchPatterns, String matchField) {
-        this(tag, patternBank, matchPatterns, matchField, false);
-    }
-
-    public GrokProcessor(String tag, Map<String, String> patternBank, List<String> matchPatterns, String matchField, boolean traceMatch) {
+    public GrokProcessor(String tag, Map<String, String> patternBank, List<String> matchPatterns, String matchField,
+                         boolean traceMatch, boolean ignoreMissing) {
         super(tag);
         this.matchField = matchField;
+        this.matchPatterns = matchPatterns;
         this.grok = new Grok(patternBank, combinePatterns(matchPatterns, traceMatch));
         this.traceMatch = traceMatch;
+        this.ignoreMissing = ignoreMissing;
     }
 
     @Override
     public void execute(IngestDocument ingestDocument) throws Exception {
-        String fieldValue = ingestDocument.getFieldValue(matchField, String.class);
+        String fieldValue = ingestDocument.getFieldValue(matchField, String.class, ignoreMissing);
+
+        if (fieldValue == null && ignoreMissing) {
+            return;
+        } else if (fieldValue == null) {
+            throw new IllegalArgumentException("field [" + matchField + "] is null, cannot process it.");
+        }
+
         Map<String, Object> matches = grok.captures(fieldValue);
         if (matches == null) {
             throw new IllegalArgumentException("Provided Grok expressions do not match field value: [" + fieldValue + "]");
@@ -64,11 +72,15 @@ public final class GrokProcessor extends AbstractProcessor {
             .forEach((e) -> ingestDocument.setFieldValue(e.getKey(), e.getValue()));
 
         if (traceMatch) {
-            @SuppressWarnings("unchecked")
-            HashMap<String, String> matchMap = (HashMap<String, String>) ingestDocument.getFieldValue(PATTERN_MATCH_KEY, Object.class);
-            matchMap.keySet().stream().findFirst().ifPresent((index) -> {
-                ingestDocument.setFieldValue(PATTERN_MATCH_KEY, index);
-            });
+            if (matchPatterns.size() > 1) {
+                @SuppressWarnings("unchecked")
+                HashMap<String, String> matchMap = (HashMap<String, String>) ingestDocument.getFieldValue(PATTERN_MATCH_KEY, Object.class);
+                matchMap.keySet().stream().findFirst().ifPresent((index) -> {
+                    ingestDocument.setFieldValue(PATTERN_MATCH_KEY, index);
+                });
+            } else {
+                ingestDocument.setFieldValue(PATTERN_MATCH_KEY, "0");
+            }
         }
     }
 
@@ -77,12 +89,20 @@ public final class GrokProcessor extends AbstractProcessor {
         return TYPE;
     }
 
-    public Grok getGrok() {
+    Grok getGrok() {
         return grok;
+    }
+
+    boolean isIgnoreMissing() {
+        return ignoreMissing;
     }
 
     String getMatchField() {
         return matchField;
+    }
+
+    List<String> getMatchPatterns() {
+        return matchPatterns;
     }
 
     static String combinePatterns(List<String> patterns, boolean traceMatch) {
@@ -114,7 +134,7 @@ public final class GrokProcessor extends AbstractProcessor {
         return combinedPattern;
     }
 
-    public final static class Factory extends AbstractProcessorFactory<GrokProcessor> {
+    public static final class Factory implements Processor.Factory {
 
         private final Map<String, String> builtinPatterns;
 
@@ -123,10 +143,12 @@ public final class GrokProcessor extends AbstractProcessor {
         }
 
         @Override
-        public GrokProcessor doCreate(String processorTag, Map<String, Object> config) throws Exception {
+        public GrokProcessor create(Map<String, Processor.Factory> registry, String processorTag,
+                                    Map<String, Object> config) throws Exception {
             String matchField = ConfigurationUtils.readStringProperty(TYPE, processorTag, config, "field");
             List<String> matchPatterns = ConfigurationUtils.readList(TYPE, processorTag, config, "patterns");
             boolean traceMatch = ConfigurationUtils.readBooleanProperty(TYPE, processorTag, config, "trace_match", false);
+            boolean ignoreMissing = ConfigurationUtils.readBooleanProperty(TYPE, processorTag, config, "ignore_missing", false);
 
             if (matchPatterns.isEmpty()) {
                 throw newConfigurationException(TYPE, processorTag, "patterns", "List of patterns must not be empty");
@@ -138,7 +160,7 @@ public final class GrokProcessor extends AbstractProcessor {
             }
 
             try {
-                return new GrokProcessor(processorTag, patternBank, matchPatterns, matchField, traceMatch);
+                return new GrokProcessor(processorTag, patternBank, matchPatterns, matchField, traceMatch, ignoreMissing);
             } catch (Exception e) {
                 throw newConfigurationException(TYPE, processorTag, "patterns",
                     "Invalid regex pattern found in: " + matchPatterns + ". " + e.getMessage());

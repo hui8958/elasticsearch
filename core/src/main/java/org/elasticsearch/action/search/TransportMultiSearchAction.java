@@ -30,7 +30,6 @@ import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.util.concurrent.AtomicArray;
-import org.elasticsearch.common.util.concurrent.ConcurrentCollections;
 import org.elasticsearch.common.util.concurrent.EsExecutors;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.TransportService;
@@ -52,7 +51,7 @@ public class TransportMultiSearchAction extends HandledTransportAction<MultiSear
         super(settings, MultiSearchAction.NAME, threadPool, transportService, actionFilters, indexNameExpressionResolver, MultiSearchRequest::new);
         this.clusterService = clusterService;
         this.searchAction = searchAction;
-        this.availableProcessors = EsExecutors.boundedNumberOfProcessors(settings);
+        this.availableProcessors = EsExecutors.numberOfProcessors(settings);
     }
 
     // For testing only:
@@ -119,7 +118,7 @@ public class TransportMultiSearchAction extends HandledTransportAction<MultiSear
             }
 
             @Override
-            public void onFailure(Throwable e) {
+            public void onFailure(Exception e) {
                 responses.set(request.responseSlot, new MultiSearchResponse.Item(null, e));
                 handleResponse();
             }
@@ -134,7 +133,7 @@ public class TransportMultiSearchAction extends HandledTransportAction<MultiSear
         });
     }
 
-    final static class SearchRequestSlot {
+    static final class SearchRequestSlot {
 
         final SearchRequest request;
         final int responseSlot;

@@ -28,9 +28,9 @@ import org.elasticsearch.common.text.Text;
 import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.common.xcontent.ToXContent;
 import org.elasticsearch.common.xcontent.XContentBuilder;
-import org.elasticsearch.rest.action.support.RestActions;
+import org.elasticsearch.rest.action.RestActions;
 import org.elasticsearch.search.aggregations.InternalAggregations;
-import org.elasticsearch.search.highlight.HighlightField;
+import org.elasticsearch.search.fetch.subphase.highlight.HighlightField;
 
 import java.io.IOException;
 import java.util.Arrays;
@@ -49,7 +49,7 @@ public class PercolateResponse extends BroadcastResponse implements Iterable<Per
 
     public static final Match[] EMPTY = new Match[0];
     // PercolateQuery emits this score if no 'query' is defined in the percolate request
-    public final static float NO_SCORE = 0.0f;
+    public static final float NO_SCORE = 0.0f;
 
     private long tookInMillis;
     private Match[] matches;

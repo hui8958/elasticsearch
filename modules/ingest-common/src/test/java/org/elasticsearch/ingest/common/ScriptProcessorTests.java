@@ -19,7 +19,9 @@
 
 package org.elasticsearch.ingest.common;
 
-import org.elasticsearch.cluster.service.ClusterService;
+import java.util.HashMap;
+import java.util.Map;
+
 import org.elasticsearch.ingest.IngestDocument;
 import org.elasticsearch.ingest.RandomDocumentPicks;
 import org.elasticsearch.script.CompiledScript;
@@ -27,41 +29,44 @@ import org.elasticsearch.script.ExecutableScript;
 import org.elasticsearch.script.Script;
 import org.elasticsearch.script.ScriptService;
 import org.elasticsearch.test.ESTestCase;
-
-import java.util.HashMap;
-import java.util.Map;
+import org.mockito.stubbing.Answer;
 
 import static org.hamcrest.Matchers.hasKey;
 import static org.hamcrest.core.Is.is;
 import static org.mockito.Mockito.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 public class ScriptProcessorTests extends ESTestCase {
 
     public void testScripting() throws Exception {
-        int randomInt = randomInt();
-        ScriptService scriptService = mock(ScriptService.class);
-        ClusterService clusterService = mock(ClusterService.class);
-        CompiledScript compiledScript = mock(CompiledScript.class);
-        Script script = mock(Script.class);
-        when(scriptService.compile(any(), any(), any(), any())).thenReturn(compiledScript);
-        ExecutableScript executableScript = mock(ExecutableScript.class);
-        when(scriptService.executable(any(), any())).thenReturn(executableScript);
-        when(executableScript.run()).thenReturn(randomInt);
+        int randomBytesIn = randomInt();
+        int randomBytesOut = randomInt();
+        int randomBytesTotal = randomBytesIn + randomBytesOut;
 
-        ScriptProcessor processor = new ScriptProcessor(randomAsciiOfLength(10), script,
-            scriptService, clusterService, "bytes_total");
+        ScriptService scriptService = mock(ScriptService.class);
+        Script script = new Script("_script");
+        ExecutableScript executableScript = mock(ExecutableScript.class);
+        when(scriptService.executable(any(Script.class), any())).thenReturn(executableScript);
 
         Map<String, Object> document = new HashMap<>();
-        document.put("bytes_in", 1234);
-        document.put("bytes_out", 4321);
+        document.put("bytes_in", randomInt());
+        document.put("bytes_out", randomInt());
         IngestDocument ingestDocument = RandomDocumentPicks.randomIngestDocument(random(), document);
+
+        doAnswer(invocationOnMock ->  {
+            ingestDocument.setFieldValue("bytes_total", randomBytesTotal);
+            return null;
+        }).when(executableScript).run();
+
+        ScriptProcessor processor = new ScriptProcessor(randomAsciiOfLength(10), script, scriptService);
+
         processor.execute(ingestDocument);
 
         assertThat(ingestDocument.getSourceAndMetadata(), hasKey("bytes_in"));
         assertThat(ingestDocument.getSourceAndMetadata(), hasKey("bytes_out"));
         assertThat(ingestDocument.getSourceAndMetadata(), hasKey("bytes_total"));
-        assertThat(ingestDocument.getSourceAndMetadata().get("bytes_total"), is(randomInt));
+        assertThat(ingestDocument.getSourceAndMetadata().get("bytes_total"), is(randomBytesTotal));
     }
 }

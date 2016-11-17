@@ -34,9 +34,9 @@ import java.util.Set;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasItem;
 
-@ClusterScope(scope = Scope.TEST, numDataNodes = 0)
+@ClusterScope(scope = Scope.TEST, numDataNodes = 0, autoMinMasterNodes = false)
 public class RecoverAfterNodesIT extends ESIntegTestCase {
-    private final static TimeValue BLOCK_WAIT_TIMEOUT = TimeValue.timeValueSeconds(10);
+    private static final TimeValue BLOCK_WAIT_TIMEOUT = TimeValue.timeValueSeconds(10);
 
     public Set<ClusterBlock> waitForNoBlocksOnNode(TimeValue timeout, Client nodeClient) throws InterruptedException {
         long start = System.currentTimeMillis();

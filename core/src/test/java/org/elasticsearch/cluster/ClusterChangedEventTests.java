@@ -30,7 +30,6 @@ import org.elasticsearch.cluster.node.DiscoveryNodes;
 import org.elasticsearch.cluster.routing.RoutingTable;
 import org.elasticsearch.common.UUIDs;
 import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.common.transport.DummyTransportAddress;
 import org.elasticsearch.gateway.GatewayService;
 import org.elasticsearch.index.Index;
 import org.elasticsearch.test.ESTestCase;
@@ -310,7 +309,7 @@ public class ClusterChangedEventTests extends ESTestCase {
                 }
             }
             final DiscoveryNode node = newNode(nodeId, roles);
-            builder.put(node);
+            builder.add(node);
             if (i == localNodeIndex) {
                 builder.localNodeId(nodeId);
             }
@@ -320,7 +319,8 @@ public class ClusterChangedEventTests extends ESTestCase {
 
     // Create a new DiscoveryNode
     private static DiscoveryNode newNode(final String nodeId, Set<DiscoveryNode.Role> roles) {
-        return new DiscoveryNode(nodeId, nodeId, DummyTransportAddress.INSTANCE, Collections.emptyMap(), roles, Version.CURRENT);
+        return new DiscoveryNode(nodeId, nodeId, nodeId, "host", "host_address", buildNewFakeTransportAddress(),
+            Collections.emptyMap(), roles, Version.CURRENT);
     }
 
     // Create the metadata for a cluster state.

@@ -29,16 +29,11 @@ import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.lucene.all.AllEntries;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.xcontent.XContentParser;
-import org.elasticsearch.index.analysis.AnalysisService;
-import org.elasticsearch.index.mapper.object.RootObjectMapper;
 
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 
-/**
- *
- */
 public abstract class ParseContext {
 
     /** Fork of {@link org.apache.lucene.document.Document} with additional functionality. */
@@ -244,11 +239,6 @@ public abstract class ParseContext {
         }
 
         @Override
-        public AnalysisService analysisService() {
-            return in.analysisService();
-        }
-
-        @Override
         public MapperService mapperService() {
             return in.mapperService();
         }
@@ -261,6 +251,16 @@ public abstract class ParseContext {
         @Override
         public void version(Field version) {
             in.version(version);
+        }
+
+        @Override
+        public Field seqNo() {
+            return in.seqNo();
+        }
+
+        @Override
+        public void seqNo(Field seqNo) {
+            in.seqNo(seqNo);
         }
 
         @Override
@@ -310,7 +310,7 @@ public abstract class ParseContext {
 
         private Field version;
 
-        private StringBuilder stringBuilder = new StringBuilder();
+        private Field seqNo;
 
         private final AllEntries allEntries;
 
@@ -389,11 +389,6 @@ public abstract class ParseContext {
         }
 
         @Override
-        public AnalysisService analysisService() {
-            return docMapperParser.analysisService;
-        }
-
-        @Override
         public MapperService mapperService() {
             return docMapperParser.mapperService;
         }
@@ -407,6 +402,17 @@ public abstract class ParseContext {
         public void version(Field version) {
             this.version = version;
         }
+
+        @Override
+        public Field seqNo() {
+            return this.seqNo;
+        }
+
+        @Override
+        public void seqNo(Field seqNo) {
+            this.seqNo = seqNo;
+        }
+
 
         @Override
         public AllEntries allEntries() {
@@ -425,6 +431,22 @@ public abstract class ParseContext {
     }
 
     public abstract DocumentMapperParser docMapperParser();
+
+    /** Return a view of this {@link ParseContext} that changes the return
+     *  value of {@link #getIncludeInAllDefault()}. */
+    public final ParseContext setIncludeInAllDefault(boolean includeInAll) {
+        return new FilterParseContext(this) {
+            @Override
+            public Boolean getIncludeInAllDefault() {
+                return includeInAll;
+            }
+        };
+    }
+
+    /** Whether field values should be added to the _all field by default. */
+    public Boolean getIncludeInAllDefault() {
+        return null;
+    }
 
     /**
      * Return a new context that will be within a copy-to operation.
@@ -512,24 +534,26 @@ public abstract class ParseContext {
 
     public abstract DocumentMapper docMapper();
 
-    public abstract AnalysisService analysisService();
-
     public abstract MapperService mapperService();
 
     public abstract Field version();
 
     public abstract void version(Field version);
 
+    public abstract Field seqNo();
+
+    public abstract void seqNo(Field seqNo);
+
     public final boolean includeInAll(Boolean includeInAll, FieldMapper mapper) {
         return includeInAll(includeInAll, mapper.fieldType().indexOptions() != IndexOptions.NONE);
     }
 
     /**
-     * Is all included or not. Will always disable it if {@link org.elasticsearch.index.mapper.internal.AllFieldMapper#enabled()}
+     * Is all included or not. Will always disable it if {@link org.elasticsearch.index.mapper.AllFieldMapper#enabled()}
      * is <tt>false</tt>. If its enabled, then will return <tt>true</tt> only if the specific flag is <tt>null</tt> or
      * its actual value (so, if not set, defaults to "true") and the field is indexed.
      */
-    private boolean includeInAll(Boolean specificIncludeInAll, boolean indexed) {
+    private boolean includeInAll(Boolean includeInAll, boolean indexed) {
         if (isWithinCopyTo()) {
             return false;
         }
@@ -539,11 +563,14 @@ public abstract class ParseContext {
         if (!docMapper().allFieldMapper().enabled()) {
             return false;
         }
+        if (includeInAll == null) {
+            includeInAll = getIncludeInAllDefault();
+        }
         // not explicitly set
-        if (specificIncludeInAll == null) {
+        if (includeInAll == null) {
             return indexed;
         }
-        return specificIncludeInAll;
+        return includeInAll;
     }
 
     public abstract AllEntries allEntries();

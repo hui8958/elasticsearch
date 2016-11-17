@@ -19,6 +19,7 @@
 
 package org.elasticsearch.action.support.nodes;
 
+import org.apache.logging.log4j.message.ParameterizedMessage;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.FailedNodeException;
 import org.elasticsearch.action.NoSuchNodeException;
@@ -31,13 +32,13 @@ import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.tasks.Task;
 import org.elasticsearch.threadpool.ThreadPool;
-import org.elasticsearch.transport.BaseTransportResponseHandler;
 import org.elasticsearch.transport.NodeShouldNotConnectException;
 import org.elasticsearch.transport.TransportChannel;
 import org.elasticsearch.transport.TransportException;
 import org.elasticsearch.transport.TransportRequest;
 import org.elasticsearch.transport.TransportRequestHandler;
 import org.elasticsearch.transport.TransportRequestOptions;
+import org.elasticsearch.transport.TransportResponseHandler;
 import org.elasticsearch.transport.TransportService;
 
 import java.util.ArrayList;
@@ -48,9 +49,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReferenceArray;
 import java.util.function.Supplier;
 
-/**
- *
- */
 public abstract class TransportNodesAction<NodesRequest extends BaseNodesRequest<NodesRequest>,
                                            NodesResponse extends BaseNodesResponse,
                                            NodeRequest extends BaseNodeRequest,
@@ -108,17 +106,18 @@ public abstract class TransportNodesAction<NodesRequest extends BaseNodesRequest
         final List<NodeResponse> responses = new ArrayList<>();
         final List<FailedNodeException> failures = new ArrayList<>();
 
+        final boolean accumulateExceptions = accumulateExceptions();
         for (int i = 0; i < nodesResponses.length(); ++i) {
             Object response = nodesResponses.get(i);
 
-            if (nodeResponseClass.isInstance(response)) {
-                responses.add(nodeResponseClass.cast(response));
-            } else if (response instanceof FailedNodeException) {
-                failures.add((FailedNodeException)response);
+            if (response instanceof FailedNodeException) {
+                if (accumulateExceptions) {
+                    failures.add((FailedNodeException)response);
+                } else {
+                    logger.warn("not accumulating exceptions, excluding exception from response", (FailedNodeException)response);
+                }
             } else {
-                logger.warn("ignoring unexpected response [{}] of type [{}], expected [{}] or [{}]",
-                            response, response != null ? response.getClass().getName() : null,
-                            nodeResponseClass.getSimpleName(), FailedNodeException.class.getSimpleName());
+                responses.add(nodeResponseClass.cast(response));
             }
         }
 
@@ -204,7 +203,7 @@ public abstract class TransportNodesAction<NodesRequest extends BaseNodesRequest
                         }
 
                         transportService.sendRequest(node, transportNodeAction, nodeRequest, builder.build(),
-                                                     new BaseTransportResponseHandler<NodeResponse>() {
+                                                     new TransportResponseHandler<NodeResponse>() {
                             @Override
                             public NodeResponse newInstance() {
                                 return newNodeResponse();
@@ -226,8 +225,8 @@ public abstract class TransportNodesAction<NodesRequest extends BaseNodesRequest
                             }
                         });
                     }
-                } catch (Throwable t) {
-                    onFailure(idx, nodeId, t);
+                } catch (Exception e) {
+                    onFailure(idx, nodeId, e);
                 }
             }
         }
@@ -241,11 +240,11 @@ public abstract class TransportNodesAction<NodesRequest extends BaseNodesRequest
 
         private void onFailure(int idx, String nodeId, Throwable t) {
             if (logger.isDebugEnabled() && !(t instanceof NodeShouldNotConnectException)) {
-                logger.debug("failed to execute on node [{}]", t, nodeId);
+                logger.debug(
+                    (org.apache.logging.log4j.util.Supplier<?>)
+                        () -> new ParameterizedMessage("failed to execute on node [{}]", nodeId), t);
             }
-            if (accumulateExceptions()) {
-                responses.set(idx, new FailedNodeException(nodeId, "Failed node [" + nodeId + "]", t));
-            }
+            responses.set(idx, new FailedNodeException(nodeId, "Failed node [" + nodeId + "]", t));
             if (counter.incrementAndGet() == responses.length()) {
                 finishHim();
             }
@@ -255,9 +254,9 @@ public abstract class TransportNodesAction<NodesRequest extends BaseNodesRequest
             NodesResponse finalResponse;
             try {
                 finalResponse = newResponse(request, responses);
-            } catch (Throwable t) {
-                logger.debug("failed to combine responses from nodes", t);
-                listener.onFailure(t);
+            } catch (Exception e) {
+                logger.debug("failed to combine responses from nodes", e);
+                listener.onFailure(e);
                 return;
             }
             listener.onResponse(finalResponse);

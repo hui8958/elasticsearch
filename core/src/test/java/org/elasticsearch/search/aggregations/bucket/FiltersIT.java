@@ -58,9 +58,6 @@ import static org.hamcrest.Matchers.greaterThanOrEqualTo;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.core.IsNull.notNullValue;
 
-/**
- *
- */
 @ESIntegTestCase.SuiteScopeTestCase
 public class FiltersIT extends ESIntegTestCase {
 
@@ -175,6 +172,7 @@ public class FiltersIT extends ESIntegTestCase {
         assertThat(filters.getName(), equalTo("tags"));
 
         assertThat(filters.getBuckets().size(), equalTo(2));
+        assertThat(filters.getProperty("_bucket_count"), equalTo(2));
         Object[] propertiesKeys = (Object[]) filters.getProperty("_key");
         Object[] propertiesDocCounts = (Object[]) filters.getProperty("_count");
         Object[] propertiesCounts = (Object[]) filters.getProperty("avg_value.value");
@@ -429,6 +427,7 @@ public class FiltersIT extends ESIntegTestCase {
         assertThat(filters.getName(), equalTo("tags"));
 
         assertThat(filters.getBuckets().size(), equalTo(3));
+        assertThat(filters.getProperty("_bucket_count"), equalTo(3));
         Object[] propertiesKeys = (Object[]) filters.getProperty("_key");
         Object[] propertiesDocCounts = (Object[]) filters.getProperty("_count");
         Object[] propertiesCounts = (Object[]) filters.getProperty("avg_value.value");

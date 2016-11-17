@@ -20,21 +20,16 @@
 package org.elasticsearch.test.transport;
 
 import org.elasticsearch.Version;
-import org.elasticsearch.cluster.ClusterName;
-import org.elasticsearch.common.settings.Setting;
-import org.elasticsearch.transport.TransportService;
-
 import org.elasticsearch.cluster.node.DiscoveryNode;
+import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.component.Lifecycle;
 import org.elasticsearch.common.component.LifecycleListener;
-import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.io.stream.BytesStreamOutput;
 import org.elasticsearch.common.io.stream.NamedWriteableRegistry;
-import org.elasticsearch.common.io.stream.StreamInput;
-import org.elasticsearch.common.network.NetworkModule;
 import org.elasticsearch.common.network.NetworkService;
+import org.elasticsearch.common.settings.ClusterSettings;
+import org.elasticsearch.common.settings.Setting;
 import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.common.settings.SettingsModule;
 import org.elasticsearch.common.transport.BoundTransportAddress;
 import org.elasticsearch.common.transport.TransportAddress;
 import org.elasticsearch.common.unit.TimeValue;
@@ -47,24 +42,28 @@ import org.elasticsearch.tasks.TaskManager;
 import org.elasticsearch.test.tasks.MockTaskManager;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.ConnectTransportException;
+import org.elasticsearch.transport.MockTcpTransport;
 import org.elasticsearch.transport.RequestHandlerRegistry;
 import org.elasticsearch.transport.Transport;
 import org.elasticsearch.transport.TransportException;
+import org.elasticsearch.transport.TransportInterceptor;
 import org.elasticsearch.transport.TransportRequest;
 import org.elasticsearch.transport.TransportRequestOptions;
 import org.elasticsearch.transport.TransportService;
 import org.elasticsearch.transport.TransportServiceAdapter;
-import org.elasticsearch.transport.local.LocalTransport;
-import org.elasticsearch.transport.netty.NettyTransport;
 
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.LinkedBlockingDeque;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * A mock transport service that allows to simulate different network topology failures.
@@ -77,54 +76,35 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * (for example, @see org.elasticsearch.discovery.zen.ping.unicast.UnicastZenPing, which constructs
  * fake DiscoveryNode instances where the publish address is one of the bound addresses).
  */
-public class MockTransportService extends TransportService {
+public final class MockTransportService extends TransportService {
+
 
     public static class TestPlugin extends Plugin {
-        public void onModule(NetworkModule module) {
-            module.registerTransportService("mock", MockTransportService.class);
-        }
-
         @Override
         public List<Setting<?>> getSettings() {
             return Arrays.asList(MockTaskManager.USE_MOCK_TASK_MANAGER_SETTING);
         }
-        @Override
-        public Settings additionalSettings() {
-            return Settings.builder().put(NetworkModule.TRANSPORT_SERVICE_TYPE_KEY, "mock").build();
-        }
     }
 
-    public static MockTransportService local(Settings settings, Version version, ThreadPool threadPool) {
-        NamedWriteableRegistry namedWriteableRegistry = new NamedWriteableRegistry();
-        Transport transport = new LocalTransport(settings, threadPool, namedWriteableRegistry, new NoneCircuitBreakerService()) {
-            @Override
-            protected Version getVersion() {
-                return version;
-            }
-        };
-        return new MockTransportService(settings, transport, threadPool);
+    public static MockTransportService createNewService(Settings settings, Version version, ThreadPool threadPool,
+            @Nullable ClusterSettings clusterSettings) {
+        NamedWriteableRegistry namedWriteableRegistry = new NamedWriteableRegistry(Collections.emptyList());
+        final Transport transport = new MockTcpTransport(settings, threadPool, BigArrays.NON_RECYCLING_INSTANCE,
+                new NoneCircuitBreakerService(), namedWriteableRegistry, new NetworkService(settings, Collections.emptyList()), version);
+        return new MockTransportService(settings, transport, threadPool, TransportService.NOOP_TRANSPORT_INTERCEPTOR, clusterSettings);
     }
-
-    public static MockTransportService nettyFromThreadPool(
-            Settings settings,
-            ThreadPool threadPool, final Version version) {
-        NamedWriteableRegistry namedWriteableRegistry = new NamedWriteableRegistry();
-        Transport transport = new NettyTransport(settings, threadPool, new NetworkService(settings), BigArrays.NON_RECYCLING_INSTANCE,
-                namedWriteableRegistry, new NoneCircuitBreakerService()) {
-            @Override
-            protected Version getCurrentVersion() {
-                return version;
-            }
-        };
-        return new MockTransportService(Settings.EMPTY, transport, threadPool);
-    }
-
 
     private final Transport original;
 
-    @Inject
-    public MockTransportService(Settings settings, Transport transport, ThreadPool threadPool) {
-        super(settings, new LookupTestTransport(transport), threadPool);
+    /**
+     * Build the service.
+     *
+     * @param clusterSettings if non null the the {@linkplain TransportService} will register with the {@link ClusterSettings} for settings
+     *        updates for {@link #TRACE_LOG_EXCLUDE_SETTING} and {@link #TRACE_LOG_INCLUDE_SETTING}.
+     */
+    public MockTransportService(Settings settings, Transport transport, ThreadPool threadPool, TransportInterceptor interceptor,
+            @Nullable ClusterSettings clusterSettings) {
+        super(settings, new LookupTestTransport(transport), threadPool, interceptor, clusterSettings);
         this.original = transport;
     }
 
@@ -165,7 +145,10 @@ public class MockTransportService extends TransportService {
      * Clears the rule associated with the provided transport address.
      */
     public void clearRule(TransportAddress transportAddress) {
-        transport().transports.remove(transportAddress);
+        Transport transport = transport().transports.remove(transportAddress);
+        if (transport instanceof ClearableTransport) {
+            ((ClearableTransport) transport).clearRule();
+        }
     }
 
     /**
@@ -315,7 +298,9 @@ public class MockTransportService extends TransportService {
     public void addUnresponsiveRule(TransportAddress transportAddress, final TimeValue duration) {
         final long startTime = System.currentTimeMillis();
 
-        addDelegate(transportAddress, new DelegateTransport(original) {
+        addDelegate(transportAddress, new ClearableTransport(original) {
+            private final Queue<Runnable> requestsToSendWhenCleared = new LinkedBlockingDeque<Runnable>();
+            private boolean cleared = false;
 
             TimeValue getDelay() {
                 return new TimeValue(duration.millis() - (System.currentTimeMillis() - startTime));
@@ -383,19 +368,43 @@ public class MockTransportService extends TransportService {
                 BytesStreamOutput bStream = new BytesStreamOutput();
                 request.writeTo(bStream);
                 final TransportRequest clonedRequest = reg.newRequest();
-                clonedRequest.readFrom(StreamInput.wrap(bStream.bytes()));
+                clonedRequest.readFrom(bStream.bytes().streamInput());
 
-                threadPool.schedule(delay, ThreadPool.Names.GENERIC, new AbstractRunnable() {
+                Runnable runnable = new AbstractRunnable() {
+                    AtomicBoolean requestSent = new AtomicBoolean();
+
                     @Override
-                    public void onFailure(Throwable e) {
+                    public void onFailure(Exception e) {
                         logger.debug("failed to send delayed request", e);
                     }
 
                     @Override
                     protected void doRun() throws IOException {
-                        original.sendRequest(node, requestId, action, clonedRequest, options);
+                        if (requestSent.compareAndSet(false, true)) {
+                            original.sendRequest(node, requestId, action, clonedRequest, options);
+                        }
                     }
-                });
+                };
+
+                // store the request to send it once the rule is cleared.
+                synchronized (this) {
+                    if (cleared) {
+                        runnable.run();
+                    } else {
+                        requestsToSendWhenCleared.add(runnable);
+                        threadPool.schedule(delay, ThreadPool.Names.GENERIC, runnable);
+                    }
+                }
+            }
+
+
+            @Override
+            public void clearRule() {
+                synchronized (this) {
+                    assert cleared == false;
+                    cleared = true;
+                    requestsToSendWhenCleared.forEach(Runnable::run);
+                }
             }
         });
     }
@@ -558,15 +567,13 @@ public class MockTransportService extends TransportService {
         }
 
         @Override
-        public Transport start() {
+        public void start() {
             transport.start();
-            return this;
         }
 
         @Override
-        public Transport stop() {
+        public void stop() {
             transport.stop();
-            return this;
         }
 
         @Override
@@ -578,6 +585,23 @@ public class MockTransportService extends TransportService {
         public Map<String, BoundTransportAddress> profileBoundAddresses() {
             return transport.profileBoundAddresses();
         }
+    }
+
+    /**
+     * The delegate transport instances defined in this class mock various kinds of disruption types. This subclass adds a method
+     * {@link #clearRule()} so that when the disruptions are cleared (see {@link #clearRule(TransportService)}) this gives the
+     * disruption a possibility to run clean-up actions.
+     */
+    public abstract static class ClearableTransport extends DelegateTransport {
+
+        public ClearableTransport(Transport transport) {
+            super(transport);
+        }
+
+        /**
+         * Called by {@link #clearRule(TransportService)}
+         */
+        public abstract void clearRule();
     }
 
 
@@ -641,10 +665,10 @@ public class MockTransportService extends TransportService {
         }
 
         @Override
-        protected void traceResponseSent(long requestId, String action, Throwable t) {
-            super.traceResponseSent(requestId, action, t);
+        protected void traceResponseSent(long requestId, String action, Exception e) {
+            super.traceResponseSent(requestId, action, e);
             for (Tracer tracer : activeTracers) {
-                tracer.responseSent(requestId, action, t);
+                tracer.responseSent(requestId, action, e);
             }
         }
 
@@ -664,6 +688,4 @@ public class MockTransportService extends TransportService {
             }
         }
     }
-
-
 }

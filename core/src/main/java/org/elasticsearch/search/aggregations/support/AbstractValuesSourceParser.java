@@ -20,12 +20,10 @@
 package org.elasticsearch.search.aggregations.support;
 
 import org.elasticsearch.common.ParseField;
-import org.elasticsearch.common.ParseFieldMatcher;
 import org.elasticsearch.common.ParsingException;
 import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.index.query.QueryParseContext;
 import org.elasticsearch.script.Script;
-import org.elasticsearch.script.Script.ScriptField;
 import org.elasticsearch.search.aggregations.Aggregator;
 import org.joda.time.DateTimeZone;
 
@@ -33,9 +31,6 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 
-/**
- *
- */
 public abstract class AbstractValuesSourceParser<VS extends ValuesSource>
         implements Aggregator.Parser {
     static final ParseField TIME_ZONE = new ParseField("time_zone");
@@ -95,6 +90,8 @@ public abstract class AbstractValuesSourceParser<VS extends ValuesSource>
         Object missing = null;
         DateTimeZone timezone = null;
         Map<ParseField, Object> otherOptions = new HashMap<>();
+        XContentParseContext parserContext =
+                new XContentParseContext(parser, context.getParseFieldMatcher(), context.getDefaultScriptLanguage());
 
         XContentParser.Token token;
         String currentFieldName = null;
@@ -126,22 +123,22 @@ public abstract class AbstractValuesSourceParser<VS extends ValuesSource>
                                             + valueType + "]. It can only work on value of type ["
                                             + targetValueType + "]");
                         }
-                    } else if (!token(aggregationName, currentFieldName, token, parser, context.getParseFieldMatcher(), otherOptions)) {
+                    } else if (!token(aggregationName, currentFieldName, token, parserContext, otherOptions)) {
                         throw new ParsingException(parser.getTokenLocation(),
                                 "Unexpected token " + token + " [" + currentFieldName + "] in [" + aggregationName + "].");
                     }
-                } else if (!token(aggregationName, currentFieldName, token, parser, context.getParseFieldMatcher(), otherOptions)) {
+                } else if (!token(aggregationName, currentFieldName, token, parserContext, otherOptions)) {
                     throw new ParsingException(parser.getTokenLocation(),
                             "Unexpected token " + token + " [" + currentFieldName + "] in [" + aggregationName + "].");
                 }
             } else if (scriptable && token == XContentParser.Token.START_OBJECT) {
-                if (context.getParseFieldMatcher().match(currentFieldName, ScriptField.SCRIPT)) {
-                    script = Script.parse(parser, context.getParseFieldMatcher());
-                } else if (!token(aggregationName, currentFieldName, token, parser, context.getParseFieldMatcher(), otherOptions)) {
+                if (context.getParseFieldMatcher().match(currentFieldName, Script.SCRIPT_PARSE_FIELD)) {
+                    script = Script.parse(parser, context.getParseFieldMatcher(), context.getDefaultScriptLanguage());
+                } else if (!token(aggregationName, currentFieldName, token, parserContext, otherOptions)) {
                     throw new ParsingException(parser.getTokenLocation(),
                             "Unexpected token " + token + " [" + currentFieldName + "] in [" + aggregationName + "].");
                 }
-            } else if (!token(aggregationName, currentFieldName, token, parser, context.getParseFieldMatcher(), otherOptions)) {
+            } else if (!token(aggregationName, currentFieldName, token, parserContext, otherOptions)) {
                 throw new ParsingException(parser.getTokenLocation(),
                         "Unexpected token " + token + " [" + currentFieldName + "] in [" + aggregationName + "].");
             }
@@ -184,8 +181,7 @@ public abstract class AbstractValuesSourceParser<VS extends ValuesSource>
      *            the target type of the final value output by the aggregation
      * @param otherOptions
      *            a {@link Map} containing the extra options parsed by the
-     *            {@link #token(String, String, org.elasticsearch.common.xcontent.XContentParser.Token,
-     *             XContentParser, ParseFieldMatcher, Map)}
+     *            {@link #token(String, String, XContentParser.Token, XContentParseContext, Map)}
      *            method
      * @return the created factory
      */
@@ -203,10 +199,8 @@ public abstract class AbstractValuesSourceParser<VS extends ValuesSource>
      *            the name of the current field being parsed
      * @param token
      *            the current token for the parser
-     * @param parser
-     *            the parser
-     * @param parseFieldMatcher
-     *            the {@link ParseFieldMatcher} to use to match field names
+     * @param context
+     *            the query context
      * @param otherOptions
      *            a {@link Map} of options to be populated by successive calls
      *            to this method which will then be passed to the
@@ -217,6 +211,6 @@ public abstract class AbstractValuesSourceParser<VS extends ValuesSource>
      * @throws IOException
      *             if an error occurs whilst parsing
      */
-    protected abstract boolean token(String aggregationName, String currentFieldName, XContentParser.Token token, XContentParser parser,
-            ParseFieldMatcher parseFieldMatcher, Map<ParseField, Object> otherOptions) throws IOException;
+    protected abstract boolean token(String aggregationName, String currentFieldName, XContentParser.Token token,
+                                     XContentParseContext context, Map<ParseField, Object> otherOptions) throws IOException;
 }

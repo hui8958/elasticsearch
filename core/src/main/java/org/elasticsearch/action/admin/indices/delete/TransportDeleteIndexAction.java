@@ -19,6 +19,8 @@
 
 package org.elasticsearch.action.admin.indices.delete;
 
+import org.apache.logging.log4j.message.ParameterizedMessage;
+import org.apache.logging.log4j.util.Supplier;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.support.ActionFilters;
 import org.elasticsearch.action.support.DestructiveOperations;
@@ -99,8 +101,8 @@ public class TransportDeleteIndexAction extends TransportMasterNodeAction<Delete
             }
 
             @Override
-            public void onFailure(Throwable t) {
-                logger.debug("failed to delete indices [{}]", t, concreteIndices);
+            public void onFailure(Exception t) {
+                logger.debug((Supplier<?>) () -> new ParameterizedMessage("failed to delete indices [{}]", concreteIndices), t);
                 listener.onFailure(t);
             }
         });

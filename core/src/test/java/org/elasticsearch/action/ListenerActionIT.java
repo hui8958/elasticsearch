@@ -28,8 +28,6 @@ import org.elasticsearch.test.ESIntegTestCase;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicReference;
 
-/**
- */
 public class ListenerActionIT extends ESIntegTestCase {
     public void testThreadedListeners() throws Throwable {
         final CountDownLatch latch = new CountDownLatch(1);
@@ -51,7 +49,7 @@ public class ListenerActionIT extends ESIntegTestCase {
             }
 
             @Override
-            public void onFailure(Throwable e) {
+            public void onFailure(Exception e) {
                 threadName.set(Thread.currentThread().getName());
                 failure.set(e);
                 latch.countDown();

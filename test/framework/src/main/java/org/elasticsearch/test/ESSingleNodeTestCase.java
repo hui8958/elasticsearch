@@ -18,6 +18,13 @@
  */
 package org.elasticsearch.test;
 
+import java.io.IOException;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
+
 import org.apache.lucene.util.IOUtils;
 import org.elasticsearch.action.admin.cluster.health.ClusterHealthResponse;
 import org.elasticsearch.action.admin.indices.create.CreateIndexRequestBuilder;
@@ -28,8 +35,8 @@ import org.elasticsearch.cluster.ClusterName;
 import org.elasticsearch.cluster.health.ClusterHealthStatus;
 import org.elasticsearch.cluster.metadata.IndexMetaData;
 import org.elasticsearch.cluster.metadata.MetaData;
-import org.elasticsearch.cluster.node.DiscoveryNode;
 import org.elasticsearch.common.Priority;
+import org.elasticsearch.common.network.NetworkModule;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.common.util.BigArrays;
@@ -41,24 +48,20 @@ import org.elasticsearch.index.IndexService;
 import org.elasticsearch.indices.IndicesService;
 import org.elasticsearch.node.MockNode;
 import org.elasticsearch.node.Node;
+import org.elasticsearch.node.NodeValidationException;
 import org.elasticsearch.plugins.Plugin;
 import org.elasticsearch.script.ScriptService;
 import org.elasticsearch.search.internal.SearchContext;
+import org.elasticsearch.test.discovery.TestZenDiscovery;
 import org.elasticsearch.threadpool.ThreadPool;
+import org.elasticsearch.transport.MockTcpTransportPlugin;
 import org.junit.After;
 import org.junit.AfterClass;
 import org.junit.Before;
 import org.junit.BeforeClass;
 
-import java.io.IOException;
-import java.nio.file.Path;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.Collections;
-
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertAcked;
 import static org.hamcrest.Matchers.equalTo;
-import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.lessThanOrEqualTo;
 
 /**
@@ -84,7 +87,7 @@ public abstract class ESSingleNodeTestCase extends ESTestCase {
         assertFalse(clusterHealthResponse.isTimedOut());
         client().admin().indices()
             .preparePutTemplate("random_index_template")
-            .setTemplate("*")
+            .setPatterns(Collections.singletonList("*"))
             .setOrder(0)
             .setSettings(Settings.builder().put(IndexMetaData.SETTING_NUMBER_OF_SHARDS, 1)
             .put(IndexMetaData.SETTING_NUMBER_OF_REPLICAS, 0)).get();
@@ -176,15 +179,28 @@ public abstract class ESSingleNodeTestCase extends ESTestCase {
             .put("node.name", nodeName())
             .put("script.inline", "true")
             .put("script.stored", "true")
+            .put(ScriptService.SCRIPT_MAX_COMPILATIONS_PER_MINUTE.getKey(), 1000)
             .put(EsExecutors.PROCESSORS_SETTING.getKey(), 1) // limit the number of threads created
-            .put("http.enabled", false)
-            .put(Node.NODE_LOCAL_SETTING.getKey(), true)
+            .put(NetworkModule.HTTP_ENABLED.getKey(), false)
+            .put("transport.type", MockTcpTransportPlugin.MOCK_TCP_TRANSPORT_NAME)
             .put(Node.NODE_DATA_SETTING.getKey(), true)
             .put(nodeSettings()) // allow test cases to provide their own settings or override these
             .build();
-        Node build = new MockNode(settings, getPlugins());
-        build.start();
-        assertThat(DiscoveryNode.isLocalNode(build.settings()), is(true));
+        Collection<Class<? extends Plugin>> plugins = getPlugins();
+        if (plugins.contains(MockTcpTransportPlugin.class) == false) {
+            plugins = new ArrayList<>(plugins);
+            plugins.add(MockTcpTransportPlugin.class);
+        }
+        if (plugins.contains(TestZenDiscovery.TestPlugin.class) == false) {
+            plugins = new ArrayList<>(plugins);
+            plugins.add(TestZenDiscovery.TestPlugin.class);
+        }
+        Node build = new MockNode(settings, plugins);
+        try {
+            build.start();
+        } catch (NodeValidationException e) {
+            throw new RuntimeException(e);
+        }
         return build;
     }
 
@@ -257,7 +273,7 @@ public abstract class ESSingleNodeTestCase extends ESTestCase {
         // Wait for the index to be allocated so that cluster state updates don't override
         // changes that would have been done locally
         ClusterHealthResponse health = client().admin().cluster()
-                .health(Requests.clusterHealthRequest(index).waitForYellowStatus().waitForEvents(Priority.LANGUID).waitForRelocatingShards(0)).actionGet();
+                .health(Requests.clusterHealthRequest(index).waitForYellowStatus().waitForEvents(Priority.LANGUID).waitForNoRelocatingShards(true)).actionGet();
         assertThat(health.getStatus(), lessThanOrEqualTo(ClusterHealthStatus.YELLOW));
         assertThat("Cluster must be a single node cluster", health.getNumberOfDataNodes(), equalTo(1));
         IndicesService instanceFromNode = getInstanceFromNode(IndicesService.class);
@@ -278,7 +294,7 @@ public abstract class ESSingleNodeTestCase extends ESTestCase {
         BigArrays bigArrays = indexService.getBigArrays();
         ThreadPool threadPool = indexService.getThreadPool();
         ScriptService scriptService = node().injector().getInstance(ScriptService.class);
-        return new TestSearchContext(threadPool, bigArrays, scriptService, indexService);
+        return new TestSearchContext(threadPool, bigArrays, indexService);
     }
 
     /**
@@ -300,9 +316,10 @@ public abstract class ESSingleNodeTestCase extends ESTestCase {
      */
     public ClusterHealthStatus ensureGreen(TimeValue timeout, String... indices) {
         ClusterHealthResponse actionGet = client().admin().cluster()
-                .health(Requests.clusterHealthRequest(indices).timeout(timeout).waitForGreenStatus().waitForEvents(Priority.LANGUID).waitForRelocatingShards(0)).actionGet();
+                .health(Requests.clusterHealthRequest(indices).timeout(timeout).waitForGreenStatus().waitForEvents(Priority.LANGUID).waitForNoRelocatingShards(true)).actionGet();
         if (actionGet.isTimedOut()) {
-            logger.info("ensureGreen timed out, cluster state:\n{}\n{}", client().admin().cluster().prepareState().get().getState().prettyPrint(), client().admin().cluster().preparePendingClusterTasks().get().prettyPrint());
+            logger.info("ensureGreen timed out, cluster state:\n{}\n{}", client().admin().cluster().prepareState().get().getState(),
+                client().admin().cluster().preparePendingClusterTasks().get());
             assertThat("timed out waiting for green state", actionGet.isTimedOut(), equalTo(false));
         }
         assertThat(actionGet.getStatus(), equalTo(ClusterHealthStatus.GREEN));

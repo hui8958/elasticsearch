@@ -19,20 +19,26 @@
 
 package org.elasticsearch.plugins;
 
+import org.apache.lucene.util.LuceneTestCase;
+import org.elasticsearch.cli.ExitCodes;
+import org.elasticsearch.cli.MockTerminal;
+import org.elasticsearch.cli.UserException;
+import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.env.Environment;
+import org.elasticsearch.test.ESTestCase;
+import org.junit.Before;
+
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.StringReader;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
 
-import org.apache.lucene.util.LuceneTestCase;
-import org.elasticsearch.cli.UserError;
-import org.elasticsearch.cli.MockTerminal;
-import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.env.Environment;
-import org.elasticsearch.test.ESTestCase;
-import org.junit.Before;
+import static org.hamcrest.CoreMatchers.containsString;
+import static org.hamcrest.CoreMatchers.not;
 
 @LuceneTestCase.SuppressFileSystems("*")
 public class RemovePluginCommandTests extends ESTestCase {
@@ -40,6 +46,7 @@ public class RemovePluginCommandTests extends ESTestCase {
     private Path home;
     private Environment env;
 
+    @Override
     @Before
     public void setUp() throws Exception {
         super.setUp();
@@ -72,7 +79,7 @@ public class RemovePluginCommandTests extends ESTestCase {
     }
 
     public void testMissing() throws Exception {
-        UserError e = expectThrows(UserError.class, () -> removePlugin("dne", home));
+        UserException e = expectThrows(UserException.class, () -> removePlugin("dne", home));
         assertTrue(e.getMessage(), e.getMessage().contains("plugin dne not found"));
         assertRemoveCleaned(env);
     }
@@ -102,11 +109,49 @@ public class RemovePluginCommandTests extends ESTestCase {
 
     public void testBinNotDir() throws Exception {
         Files.createDirectories(env.pluginsFile().resolve("elasticsearch"));
-        UserError e = expectThrows(UserError.class, () -> removePlugin("elasticsearch", home));
+        UserException e = expectThrows(UserException.class, () -> removePlugin("elasticsearch", home));
         assertTrue(e.getMessage(), e.getMessage().contains("not a directory"));
         assertTrue(Files.exists(env.pluginsFile().resolve("elasticsearch"))); // did not remove
         assertTrue(Files.exists(env.binFile().resolve("elasticsearch")));
         assertRemoveCleaned(env);
     }
 
+    public void testConfigDirPreserved() throws Exception {
+        Files.createDirectories(env.pluginsFile().resolve("fake"));
+        final Path configDir = env.configFile().resolve("fake");
+        Files.createDirectories(configDir);
+        Files.createFile(configDir.resolve("fake.yml"));
+        final MockTerminal terminal = removePlugin("fake", home);
+        assertTrue(Files.exists(env.configFile().resolve("fake")));
+        assertThat(terminal.getOutput(), containsString(expectedConfigDirPreservedMessage(configDir)));
+        assertRemoveCleaned(env);
+    }
+
+    public void testNoConfigDirPreserved() throws Exception {
+        Files.createDirectories(env.pluginsFile().resolve("fake"));
+        final Path configDir = env.configFile().resolve("fake");
+        final MockTerminal terminal = removePlugin("fake", home);
+        assertThat(terminal.getOutput(), not(containsString(expectedConfigDirPreservedMessage(configDir))));
+    }
+
+    public void testRemoveUninstalledPluginErrors() throws Exception {
+        UserException e = expectThrows(UserException.class, () -> removePlugin("fake", home));
+        assertEquals(ExitCodes.CONFIG, e.exitCode);
+        assertEquals("plugin fake not found; run 'elasticsearch-plugin list' to get list of installed plugins", e.getMessage());
+
+        MockTerminal terminal = new MockTerminal();
+        new RemovePluginCommand().main(new String[] { "-Epath.home=" + home, "fake" }, terminal);
+        try (BufferedReader reader = new BufferedReader(new StringReader(terminal.getOutput()))) {
+            assertEquals("-> Removing fake...", reader.readLine());
+            assertEquals("ERROR: plugin fake not found; run 'elasticsearch-plugin list' to get list of installed plugins",
+                    reader.readLine());
+            assertNull(reader.readLine());
+        }
+    }
+
+    private String expectedConfigDirPreservedMessage(final Path configDir) {
+        return "-> Preserving plugin config files [" + configDir + "] in case of upgrade, delete manually if not needed";
+    }
+
 }
+

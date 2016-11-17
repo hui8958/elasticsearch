@@ -30,7 +30,7 @@ import org.elasticsearch.index.query.MoreLikeThisQueryBuilder.Item;
 import org.elasticsearch.index.query.functionscore.FunctionScoreQueryBuilder;
 import org.elasticsearch.index.query.functionscore.FunctionScoreQueryBuilder.FilterFunctionBuilder;
 import org.elasticsearch.script.Script;
-import org.elasticsearch.script.ScriptService.ScriptType;
+import org.elasticsearch.script.ScriptType;
 import org.elasticsearch.test.ESTestCase;
 
 import java.io.IOException;
@@ -76,7 +76,6 @@ import static org.elasticsearch.index.query.QueryBuilders.spanNotQuery;
 import static org.elasticsearch.index.query.QueryBuilders.spanOrQuery;
 import static org.elasticsearch.index.query.QueryBuilders.spanTermQuery;
 import static org.elasticsearch.index.query.QueryBuilders.spanWithinQuery;
-import static org.elasticsearch.index.query.QueryBuilders.templateQuery;
 import static org.elasticsearch.index.query.QueryBuilders.termQuery;
 import static org.elasticsearch.index.query.QueryBuilders.termsQuery;
 import static org.elasticsearch.index.query.QueryBuilders.typeQuery;
@@ -294,13 +293,11 @@ public class QueryDSLDocumentationTests extends ESTestCase {
                 new Script("doc['num1'].value > 1")
             );
 
-        Map<String, Integer> parameters = new HashMap<>();
+        Map<String, Object> parameters = new HashMap<>();
         parameters.put("param1", 5);
         scriptQuery(
                 new Script(
-                    "mygroovyscript",
-                    ScriptType.FILE,
-                    "groovy",
+                    ScriptType.FILE, "groovy", "mygroovyscript",
                     parameters)
             );
 
@@ -357,13 +354,6 @@ public class QueryDSLDocumentationTests extends ESTestCase {
                     .addClause(spanTermQuery("field1", "baz"))
                     .inOrder(true),
                 spanTermQuery("field1", "foo"));
-    }
-
-    public void testTemplate() {
-        templateQuery(
-                "gender_template",
-                ScriptType.STORED,
-                new HashMap<>());
     }
 
     public void testTerm() {

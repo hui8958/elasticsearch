@@ -22,9 +22,6 @@ import org.elasticsearch.common.ParseField;
 import org.elasticsearch.search.aggregations.support.ValuesSource.Numeric;
 import org.elasticsearch.search.aggregations.support.ValuesSourceAggregationBuilder;
 
-/**
- *
- */
 public class PercentilesParser extends AbstractPercentilesParser {
 
     public static final ParseField PERCENTS_FIELD = new ParseField("percents");
@@ -33,7 +30,7 @@ public class PercentilesParser extends AbstractPercentilesParser {
         super(true);
     }
 
-    public final static double[] DEFAULT_PERCENTS = new double[] { 1, 5, 25, 50, 75, 95, 99 };
+    public static final double[] DEFAULT_PERCENTS = new double[] { 1, 5, 25, 50, 75, 95, 99 };
 
     @Override
     protected ParseField keysField() {

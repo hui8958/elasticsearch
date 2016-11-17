@@ -20,8 +20,8 @@
 package org.elasticsearch.index.mapper;
 
 import com.carrotsearch.hppc.ObjectHashSet;
-
 import com.carrotsearch.hppc.cursors.ObjectCursor;
+import org.apache.logging.log4j.message.ParameterizedMessage;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.DelegatingAnalyzerWrapper;
 import org.elasticsearch.ElasticsearchGenerationException;
@@ -35,17 +35,16 @@ import org.elasticsearch.common.settings.Setting.Property;
 import org.elasticsearch.common.xcontent.XContentFactory;
 import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.index.AbstractIndexComponent;
-import org.elasticsearch.index.IndexService;
 import org.elasticsearch.index.IndexSettings;
-import org.elasticsearch.index.analysis.AnalysisService;
+import org.elasticsearch.index.analysis.IndexAnalyzers;
 import org.elasticsearch.index.mapper.Mapper.BuilderContext;
-import org.elasticsearch.index.mapper.object.ObjectMapper;
 import org.elasticsearch.index.query.QueryShardContext;
 import org.elasticsearch.index.similarity.SimilarityService;
 import org.elasticsearch.indices.InvalidTypeNameException;
 import org.elasticsearch.indices.TypeMissingException;
 import org.elasticsearch.indices.mapper.MapperRegistry;
 
+import java.io.Closeable;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -64,10 +63,7 @@ import static java.util.Collections.emptySet;
 import static java.util.Collections.unmodifiableMap;
 import static org.elasticsearch.common.collect.MapBuilder.newMapBuilder;
 
-/**
- *
- */
-public class MapperService extends AbstractIndexComponent {
+public class MapperService extends AbstractIndexComponent implements Closeable {
 
     /**
      * The reason why a mapping is being merged.
@@ -102,7 +98,7 @@ public class MapperService extends AbstractIndexComponent {
     @Deprecated
     public static final String PERCOLATOR_LEGACY_TYPE_NAME = ".percolator";
 
-    private final AnalysisService analysisService;
+    private final IndexAnalyzers indexAnalyzers;
 
     /**
      * Will create types automatically if they do not exists in the mapping definition yet
@@ -116,6 +112,7 @@ public class MapperService extends AbstractIndexComponent {
     private volatile FieldTypeLookup fieldTypes;
     private volatile Map<String, ObjectMapper> fullPathObjectMappers = new HashMap<>();
     private boolean hasNested = false; // updated dynamically to true when a nested object is added
+    private boolean allEnabled = false; // updated dynamically to true when _all is enabled
 
     private final DocumentMapperParser documentParser;
 
@@ -129,16 +126,16 @@ public class MapperService extends AbstractIndexComponent {
 
     final MapperRegistry mapperRegistry;
 
-    public MapperService(IndexSettings indexSettings, AnalysisService analysisService,
+    public MapperService(IndexSettings indexSettings, IndexAnalyzers indexAnalyzers,
                          SimilarityService similarityService, MapperRegistry mapperRegistry,
                          Supplier<QueryShardContext> queryShardContextSupplier) {
         super(indexSettings);
-        this.analysisService = analysisService;
+        this.indexAnalyzers = indexAnalyzers;
         this.fieldTypes = new FieldTypeLookup();
-        this.documentParser = new DocumentMapperParser(indexSettings, this, analysisService, similarityService, mapperRegistry, queryShardContextSupplier);
-        this.indexAnalyzer = new MapperAnalyzerWrapper(analysisService.defaultIndexAnalyzer(), p -> p.indexAnalyzer());
-        this.searchAnalyzer = new MapperAnalyzerWrapper(analysisService.defaultSearchAnalyzer(), p -> p.searchAnalyzer());
-        this.searchQuoteAnalyzer = new MapperAnalyzerWrapper(analysisService.defaultSearchQuoteAnalyzer(), p -> p.searchQuoteAnalyzer());
+        this.documentParser = new DocumentMapperParser(indexSettings, this, indexAnalyzers, similarityService, mapperRegistry, queryShardContextSupplier);
+        this.indexAnalyzer = new MapperAnalyzerWrapper(indexAnalyzers.getDefaultIndexAnalyzer(), p -> p.indexAnalyzer());
+        this.searchAnalyzer = new MapperAnalyzerWrapper(indexAnalyzers.getDefaultSearchAnalyzer(), p -> p.searchAnalyzer());
+        this.searchQuoteAnalyzer = new MapperAnalyzerWrapper(indexAnalyzers.getDefaultSearchQuoteAnalyzer(), p -> p.searchQuoteAnalyzer());
         this.mapperRegistry = mapperRegistry;
 
         this.dynamic = this.indexSettings.getValue(INDEX_MAPPER_DYNAMIC_SETTING);
@@ -153,6 +150,13 @@ public class MapperService extends AbstractIndexComponent {
 
     public boolean hasNested() {
         return this.hasNested;
+    }
+
+    /**
+     * Returns true if the "_all" field is enabled for the type
+     */
+    public boolean allEnabled() {
+        return this.allEnabled;
     }
 
     /**
@@ -173,8 +177,8 @@ public class MapperService extends AbstractIndexComponent {
         };
     }
 
-    public AnalysisService analysisService() {
-        return this.analysisService;
+    public IndexAnalyzers getIndexAnalyzers() {
+        return this.indexAnalyzers;
     }
 
     public DocumentMapperParser documentMapperParser() {
@@ -218,8 +222,11 @@ public class MapperService extends AbstractIndexComponent {
                         requireRefresh = true;
                     }
                 }
-            } catch (Throwable e) {
-                logger.warn("[{}] failed to add mapping [{}], source [{}]", e, index(), mappingType, mappingSource);
+            } catch (Exception e) {
+                logger.warn(
+                    (org.apache.logging.log4j.util.Supplier<?>)
+                        () -> new ParameterizedMessage("[{}] failed to add mapping [{}], source [{}]", index(), mappingType, mappingSource),
+                    e);
                 throw e;
             }
         }
@@ -316,7 +323,7 @@ public class MapperService extends AbstractIndexComponent {
         Collections.addAll(fieldMappers, newMapper.mapping().metadataMappers);
         MapperUtils.collect(newMapper.mapping().root(), objectMappers, fieldMappers);
         checkFieldUniqueness(newMapper.type(), objectMappers, fieldMappers);
-        checkObjectsCompatibility(newMapper.type(), objectMappers, fieldMappers, updateAllTypes);
+        checkObjectsCompatibility(objectMappers, updateAllTypes);
 
         // 3. update lookup data-structures
         // this will in particular make sure that the merged fields are compatible with other types
@@ -370,6 +377,7 @@ public class MapperService extends AbstractIndexComponent {
         this.hasNested = hasNested;
         this.fullPathObjectMappers = fullPathObjectMappers;
         this.parentTypes = parentTypes;
+        this.allEnabled = mapper.allFieldMapper().enabled();
 
         assert assertSerialization(newMapper);
         assert assertMappersShareSameFieldType();
@@ -381,7 +389,7 @@ public class MapperService extends AbstractIndexComponent {
         for (DocumentMapper mapper : docMappers(false)) {
             List<FieldMapper> fieldMappers = new ArrayList<>();
             Collections.addAll(fieldMappers, mapper.mapping().metadataMappers);
-            MapperUtils.collect(mapper.root(), new ArrayList<ObjectMapper>(), fieldMappers);
+            MapperUtils.collect(mapper.root(), new ArrayList<>(), fieldMappers);
             for (FieldMapper fieldMapper : fieldMappers) {
                 assert fieldMapper.fieldType() == fieldTypes.get(fieldMapper.name()) : fieldMapper.name();
             }
@@ -449,7 +457,7 @@ public class MapperService extends AbstractIndexComponent {
         }
     }
 
-    private void checkObjectsCompatibility(String type, Collection<ObjectMapper> objectMappers, Collection<FieldMapper> fieldMappers, boolean updateAllTypes) {
+    private void checkObjectsCompatibility(Collection<ObjectMapper> objectMappers, boolean updateAllTypes) {
         assert Thread.holdsLock(this);
 
         for (ObjectMapper newObjectMapper : objectMappers) {
@@ -540,7 +548,8 @@ public class MapperService extends AbstractIndexComponent {
             return new DocumentMapperForType(mapper, null);
         }
         if (!dynamic) {
-            throw new TypeMissingException(index(), type, "trying to auto create mapping, but dynamic mapping is disabled");
+            throw new TypeMissingException(index(),
+                    new IllegalStateException("trying to auto create mapping, but dynamic mapping is disabled"), type);
         }
         mapper = parse(type, null, true);
         return new DocumentMapperForType(mapper, mapper.mapping());
@@ -616,6 +625,11 @@ public class MapperService extends AbstractIndexComponent {
         return parentTypes;
     }
 
+    @Override
+    public void close() throws IOException {
+        indexAnalyzers.close();
+    }
+
     /**
      * @return Whether a field is a metadata field.
      */
@@ -651,4 +665,5 @@ public class MapperService extends AbstractIndexComponent {
             return defaultAnalyzer;
         }
     }
+
 }

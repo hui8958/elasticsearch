@@ -22,6 +22,7 @@ import com.carrotsearch.hppc.cursors.IntObjectCursor;
 import com.carrotsearch.randomizedtesting.generators.RandomPicks;
 import org.apache.lucene.index.CheckIndex;
 import org.apache.lucene.index.IndexFileNames;
+import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.action.admin.cluster.health.ClusterHealthResponse;
 import org.elasticsearch.action.admin.cluster.node.stats.NodeStats;
 import org.elasticsearch.action.admin.cluster.node.stats.NodesStatsResponse;
@@ -59,8 +60,8 @@ import org.elasticsearch.index.shard.IndexEventListener;
 import org.elasticsearch.index.shard.IndexShard;
 import org.elasticsearch.index.shard.IndexShardState;
 import org.elasticsearch.index.shard.ShardId;
+import org.elasticsearch.indices.recovery.PeerRecoveryTargetService;
 import org.elasticsearch.indices.recovery.RecoveryFileChunkRequest;
-import org.elasticsearch.indices.recovery.RecoveryTargetService;
 import org.elasticsearch.monitor.fs.FsInfo;
 import org.elasticsearch.node.Node;
 import org.elasticsearch.plugins.Plugin;
@@ -69,6 +70,7 @@ import org.elasticsearch.test.CorruptionUtils;
 import org.elasticsearch.test.ESIntegTestCase;
 import org.elasticsearch.test.InternalSettingsPlugin;
 import org.elasticsearch.test.MockIndexEventListener;
+import org.elasticsearch.test.junit.annotations.TestLogging;
 import org.elasticsearch.test.store.MockFSIndexStore;
 import org.elasticsearch.test.transport.MockTransportService;
 import org.elasticsearch.transport.TransportException;
@@ -84,6 +86,7 @@ import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
@@ -124,7 +127,7 @@ public class CorruptedFileIT extends ESIntegTestCase {
 
     @Override
     protected Collection<Class<? extends Plugin>> nodePlugins() {
-        return pluginList(MockTransportService.TestPlugin.class, MockIndexEventListener.TestPlugin.class, MockFSIndexStore.TestPlugin.class,
+        return Arrays.asList(MockTransportService.TestPlugin.class, MockIndexEventListener.TestPlugin.class, MockFSIndexStore.TestPlugin.class,
             InternalSettingsPlugin.class);  // uses index.version.created
     }
 
@@ -156,7 +159,7 @@ public class CorruptedFileIT extends ESIntegTestCase {
         }
         indexRandom(true, builders);
         ensureGreen();
-        assertAllSuccessful(client().admin().indices().prepareFlush().setForce(true).setWaitIfOngoing(true).execute().actionGet());
+        assertAllSuccessful(client().admin().indices().prepareFlush().setForce(true).execute().actionGet());
         // we have to flush at least once here since we don't corrupt the translog
         SearchResponse countResponse = client().prepareSearch().setSize(0).get();
         assertHitCount(countResponse, numDocs);
@@ -173,9 +176,10 @@ public class CorruptedFileIT extends ESIntegTestCase {
         ClusterHealthResponse health = client().admin().cluster()
             .health(Requests.clusterHealthRequest("test").waitForGreenStatus()
                 .timeout("5m") // sometimes due to cluster rebalacing and random settings default timeout is just not enough.
-                .waitForRelocatingShards(0)).actionGet();
+                .waitForNoRelocatingShards(true)).actionGet();
         if (health.isTimedOut()) {
-            logger.info("cluster state:\n{}\n{}", client().admin().cluster().prepareState().get().getState().prettyPrint(), client().admin().cluster().preparePendingClusterTasks().get().prettyPrint());
+            logger.info("cluster state:\n{}\n{}",
+                client().admin().cluster().prepareState().get().getState(), client().admin().cluster().preparePendingClusterTasks().get());
             assertThat("timed out waiting for green state", health.isTimedOut(), equalTo(false));
         }
         assertThat(health.getStatus(), equalTo(ClusterHealthStatus.GREEN));
@@ -192,7 +196,7 @@ public class CorruptedFileIT extends ESIntegTestCase {
          * run the checkindex. if the corruption is still there we will catch it.
          */
         final CountDownLatch latch = new CountDownLatch(numShards * 3); // primary + 2 replicas
-        final CopyOnWriteArrayList<Throwable> exception = new CopyOnWriteArrayList<>();
+        final CopyOnWriteArrayList<Exception> exception = new CopyOnWriteArrayList<>();
         final IndexEventListener listener = new IndexEventListener() {
             @Override
             public void afterIndexShardClosed(ShardId sid, @Nullable IndexShard indexShard, Settings indexSettings) {
@@ -210,12 +214,12 @@ public class CorruptedFileIT extends ESIntegTestCase {
                             out.flush();
                             CheckIndex.Status status = checkIndex.checkIndex();
                             if (!status.clean) {
-                                logger.warn("check index [failure]\n{}", new String(os.bytes().toBytes(), StandardCharsets.UTF_8));
+                                logger.warn("check index [failure]\n{}", os.bytes().utf8ToString());
                                 throw new IOException("index check failure");
                             }
                         }
-                    } catch (Throwable t) {
-                        exception.add(t);
+                    } catch (Exception e) {
+                        exception.add(e);
                     } finally {
                         store.decRef();
                         latch.countDown();
@@ -259,7 +263,7 @@ public class CorruptedFileIT extends ESIntegTestCase {
         }
         indexRandom(true, builders);
         ensureGreen();
-        assertAllSuccessful(client().admin().indices().prepareFlush().setForce(true).setWaitIfOngoing(true).execute().actionGet());
+        assertAllSuccessful(client().admin().indices().prepareFlush().setForce(true).execute().actionGet());
         // we have to flush at least once here since we don't corrupt the translog
         SearchResponse countResponse = client().prepareSearch().setSize(0).get();
         assertHitCount(countResponse, numDocs);
@@ -281,7 +285,8 @@ public class CorruptedFileIT extends ESIntegTestCase {
             .health(Requests.clusterHealthRequest("test")).get();
         if (response.getStatus() != ClusterHealthStatus.RED) {
             logger.info("Cluster turned red in busy loop: {}", didClusterTurnRed);
-            logger.info("cluster state:\n{}\n{}", client().admin().cluster().prepareState().get().getState().prettyPrint(), client().admin().cluster().preparePendingClusterTasks().get().prettyPrint());
+            logger.info("cluster state:\n{}\n{}",
+                client().admin().cluster().prepareState().get().getState(), client().admin().cluster().preparePendingClusterTasks().get());
         }
         assertThat(response.getStatus(), is(ClusterHealthStatus.RED));
         ClusterState state = client().admin().cluster().prepareState().get().getState();
@@ -344,9 +349,9 @@ public class CorruptedFileIT extends ESIntegTestCase {
 
                 @Override
                 public void sendRequest(DiscoveryNode node, long requestId, String action, TransportRequest request, TransportRequestOptions options) throws IOException, TransportException {
-                    if (corrupt.get() && action.equals(RecoveryTargetService.Actions.FILE_CHUNK)) {
+                    if (corrupt.get() && action.equals(PeerRecoveryTargetService.Actions.FILE_CHUNK)) {
                         RecoveryFileChunkRequest req = (RecoveryFileChunkRequest) request;
-                        byte[] array = req.content().array();
+                        byte[] array = BytesRef.deepCopyOf(req.content().toBytesRef()).bytes;
                         int i = randomIntBetween(0, req.content().length() - 1);
                         array[i] = (byte) ~array[i]; // flip one byte in the content
                         hasCorrupted.countDown();
@@ -405,7 +410,7 @@ public class CorruptedFileIT extends ESIntegTestCase {
         }
         indexRandom(true, builders);
         ensureGreen();
-        assertAllSuccessful(client().admin().indices().prepareFlush().setForce(true).setWaitIfOngoing(true).execute().actionGet());
+        assertAllSuccessful(client().admin().indices().prepareFlush().setForce(true).execute().actionGet());
         // we have to flush at least once here since we don't corrupt the translog
         SearchResponse countResponse = client().prepareSearch().setSize(0).get();
         assertHitCount(countResponse, numDocs);
@@ -416,13 +421,15 @@ public class CorruptedFileIT extends ESIntegTestCase {
 
                 @Override
                 public void sendRequest(DiscoveryNode node, long requestId, String action, TransportRequest request, TransportRequestOptions options) throws IOException, TransportException {
-                    if (action.equals(RecoveryTargetService.Actions.FILE_CHUNK)) {
+                    if (action.equals(PeerRecoveryTargetService.Actions.FILE_CHUNK)) {
                         RecoveryFileChunkRequest req = (RecoveryFileChunkRequest) request;
                         if (truncate && req.length() > 1) {
-                            BytesArray array = new BytesArray(req.content().array(), req.content().arrayOffset(), (int) req.length() - 1);
+                            BytesRef bytesRef = req.content().toBytesRef();
+                            BytesArray array = new BytesArray(bytesRef.bytes, bytesRef.offset, (int) req.length() - 1);
                             request = new RecoveryFileChunkRequest(req.recoveryId(), req.shardId(), req.metadata(), req.position(), array, req.lastChunk(), req.totalTranslogOps(), req.sourceThrottleTimeInNanos());
                         } else {
-                            byte[] array = req.content().array();
+                            assert req.content().toBytesRef().bytes == req.content().toBytesRef().bytes : "no internal reference!!";
+                            final byte[] array = req.content().toBytesRef().bytes;
                             int i = randomIntBetween(0, req.content().length() - 1);
                             array[i] = (byte) ~array[i]; // flip one byte in the content
                         }
@@ -440,7 +447,8 @@ public class CorruptedFileIT extends ESIntegTestCase {
         ClusterHealthResponse actionGet = client().admin().cluster()
             .health(Requests.clusterHealthRequest("test").waitForGreenStatus()).actionGet();
         if (actionGet.isTimedOut()) {
-            logger.info("ensureGreen timed out, cluster state:\n{}\n{}", client().admin().cluster().prepareState().get().getState().prettyPrint(), client().admin().cluster().preparePendingClusterTasks().get().prettyPrint());
+            logger.info("ensureGreen timed out, cluster state:\n{}\n{}",
+                client().admin().cluster().prepareState().get().getState(), client().admin().cluster().preparePendingClusterTasks().get());
             assertThat("timed out waiting for green state", actionGet.isTimedOut(), equalTo(false));
         }
         // we are green so primaries got not corrupted.
@@ -468,6 +476,7 @@ public class CorruptedFileIT extends ESIntegTestCase {
      * TODO once checksum verification on snapshotting is implemented this test needs to be fixed or split into several
      * parts... We should also corrupt files on the actual snapshot and check that we don't restore the corrupted shard.
      */
+    @TestLogging("org.elasticsearch.monitor.fs:DEBUG")
     public void testCorruptFileThenSnapshotAndRestore() throws ExecutionException, InterruptedException, IOException {
         int numDocs = scaledRandomIntBetween(100, 1000);
         internalCluster().ensureAtLeastNumDataNodes(2);
@@ -485,7 +494,7 @@ public class CorruptedFileIT extends ESIntegTestCase {
         }
         indexRandom(true, builders);
         ensureGreen();
-        assertAllSuccessful(client().admin().indices().prepareFlush().setForce(true).setWaitIfOngoing(true).execute().actionGet());
+        assertAllSuccessful(client().admin().indices().prepareFlush().setForce(true).execute().actionGet());
         // we have to flush at least once here since we don't corrupt the translog
         SearchResponse countResponse = client().prepareSearch().setSize(0).get();
         assertHitCount(countResponse, numDocs);
@@ -540,7 +549,7 @@ public class CorruptedFileIT extends ESIntegTestCase {
         }
         indexRandom(true, builders);
         ensureGreen();
-        assertAllSuccessful(client().admin().indices().prepareFlush().setForce(true).setWaitIfOngoing(true).execute().actionGet());
+        assertAllSuccessful(client().admin().indices().prepareFlush().setForce(true).execute().actionGet());
         // we have to flush at least once here since we don't corrupt the translog
         SearchResponse countResponse = client().prepareSearch().setSize(0).get();
         assertHitCount(countResponse, numDocs);
@@ -643,12 +652,12 @@ public class CorruptedFileIT extends ESIntegTestCase {
         return shardRouting;
     }
 
-    private static final boolean isPerCommitFile(String fileName) {
+    private static boolean isPerCommitFile(String fileName) {
         // .liv and segments_N are per commit files and might change after corruption
         return fileName.startsWith("segments") || fileName.endsWith(".liv");
     }
 
-    private static final boolean isPerSegmentFile(String fileName) {
+    private static boolean isPerSegmentFile(String fileName) {
         return isPerCommitFile(fileName) == false;
     }
 

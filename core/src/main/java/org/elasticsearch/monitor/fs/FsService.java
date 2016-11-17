@@ -19,8 +19,8 @@
 
 package org.elasticsearch.monitor.fs;
 
+import org.apache.logging.log4j.Logger;
 import org.elasticsearch.common.component.AbstractComponent;
-import org.elasticsearch.common.logging.ESLogger;
 import org.elasticsearch.common.settings.Setting;
 import org.elasticsearch.common.settings.Setting.Property;
 import org.elasticsearch.common.settings.Settings;
@@ -36,7 +36,7 @@ public class FsService extends AbstractComponent {
     private final TimeValue refreshInterval;
     private final SingleObjectCache<FsInfo> cache;
 
-    public final static Setting<TimeValue> REFRESH_INTERVAL_SETTING =
+    public static final Setting<TimeValue> REFRESH_INTERVAL_SETTING =
         Setting.timeSetting(
             "monitor.fs.refresh_interval",
             TimeValue.timeValueSeconds(1),
@@ -55,7 +55,7 @@ public class FsService extends AbstractComponent {
         return cache.getOrRefresh();
     }
 
-    private static FsInfo stats(FsProbe probe, FsInfo initialValue, ESLogger logger) {
+    private static FsInfo stats(FsProbe probe, FsInfo initialValue, Logger logger) {
         try {
             return probe.stats(initialValue);
         } catch (IOException e) {

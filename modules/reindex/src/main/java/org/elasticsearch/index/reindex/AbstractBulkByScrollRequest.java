@@ -21,8 +21,8 @@ package org.elasticsearch.index.reindex;
 
 import org.elasticsearch.action.ActionRequest;
 import org.elasticsearch.action.ActionRequestValidationException;
-import org.elasticsearch.action.WriteConsistencyLevel;
 import org.elasticsearch.action.search.SearchRequest;
+import org.elasticsearch.action.support.ActiveShardCount;
 import org.elasticsearch.action.support.replication.ReplicationRequest;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
@@ -39,7 +39,7 @@ import static org.elasticsearch.common.unit.TimeValue.timeValueMillis;
 import static org.elasticsearch.common.unit.TimeValue.timeValueMinutes;
 
 public abstract class AbstractBulkByScrollRequest<Self extends AbstractBulkByScrollRequest<Self>>
-        extends ActionRequest<Self> {
+        extends ActionRequest {
     public static final int SIZE_ALL_MATCHES = -1;
     private static final TimeValue DEFAULT_SCROLL_TIMEOUT = timeValueMinutes(5);
     private static final int DEFAULT_SCROLL_SIZE = 1000;
@@ -71,9 +71,9 @@ public abstract class AbstractBulkByScrollRequest<Self extends AbstractBulkByScr
     private TimeValue timeout = ReplicationRequest.DEFAULT_TIMEOUT;
 
     /**
-     * Consistency level for write requests.
+     * The number of shard copies that must be active before proceeding with the write.
      */
-    private WriteConsistencyLevel consistency = WriteConsistencyLevel.DEFAULT;
+    private ActiveShardCount activeShardCount = ActiveShardCount.DEFAULT;
 
     /**
      * Initial delay after a rejection before retrying a bulk request. With the default maxRetries the total backoff for retrying rejections
@@ -94,21 +94,37 @@ public abstract class AbstractBulkByScrollRequest<Self extends AbstractBulkByScr
     private float requestsPerSecond = Float.POSITIVE_INFINITY;
 
     /**
-     * Should this task persist its result?
+     * Should this task store its result?
      */
-    private boolean shouldPersistResult;
+    private boolean shouldStoreResult;
 
+    /**
+     * The number of slices this task should be divided into. Defaults to 1 meaning the task isn't sliced into subtasks.
+     */
+    private int slices = 1;
+
+    /**
+     * Constructor for deserialization.
+     */
     public AbstractBulkByScrollRequest() {
     }
 
-    public AbstractBulkByScrollRequest(SearchRequest source) {
-        this.searchRequest = source;
+    /**
+     * Constructor for actual use.
+     *
+     * @param searchRequest the search request to execute to get the documents to process
+     * @param setDefaults should this request set the defaults on the search request? Usually set to true but leave it false to support
+     *        request slicing
+     */
+    public AbstractBulkByScrollRequest(SearchRequest searchRequest, boolean setDefaults) {
+        this.searchRequest = searchRequest;
 
         // Set the defaults which differ from SearchRequest's defaults.
-        source.scroll(DEFAULT_SCROLL_TIMEOUT);
-        source.source(new SearchSourceBuilder());
-        source.source().version(true);
-        source.source().size(DEFAULT_SCROLL_SIZE);
+        if (setDefaults) {
+            searchRequest.scroll(DEFAULT_SCROLL_TIMEOUT);
+            searchRequest.source(new SearchSourceBuilder());
+            searchRequest.source().size(DEFAULT_SCROLL_SIZE);
+        }
     }
 
     /**
@@ -123,8 +139,8 @@ public abstract class AbstractBulkByScrollRequest<Self extends AbstractBulkByScr
         if (searchRequest.source().from() != -1) {
             e = addValidationError("from is not supported in this context", e);
         }
-        if (searchRequest.source().fields() != null) {
-            e = addValidationError("fields is not supported in this context", e);
+        if (searchRequest.source().storedFields() != null) {
+            e = addValidationError("stored_fields is not supported in this context", e);
         }
         if (maxRetries < 0) {
             e = addValidationError("retries cannnot be negative", e);
@@ -134,6 +150,9 @@ public abstract class AbstractBulkByScrollRequest<Self extends AbstractBulkByScr
                     "size should be greater than 0 if the request is limited to some number of documents or -1 if it isn't but it was ["
                             + size + "]",
                     e);
+        }
+        if (searchRequest.source().slice() != null && slices != 1) {
+            e = addValidationError("can't specify both slice and workers", e);
         }
         return e;
     }
@@ -224,18 +243,28 @@ public abstract class AbstractBulkByScrollRequest<Self extends AbstractBulkByScr
     }
 
     /**
-     * Consistency level for write requests.
+     * The number of shard copies that must be active before proceeding with the write.
      */
-    public WriteConsistencyLevel getConsistency() {
-        return consistency;
+    public ActiveShardCount getWaitForActiveShards() {
+        return activeShardCount;
     }
 
     /**
-     * Consistency level for write requests.
+     * Sets the number of shard copies that must be active before proceeding with the write.
+     * See {@link ReplicationRequest#waitForActiveShards(ActiveShardCount)} for details.
      */
-    public Self setConsistency(WriteConsistencyLevel consistency) {
-        this.consistency = consistency;
+    public Self setWaitForActiveShards(ActiveShardCount activeShardCount) {
+        this.activeShardCount = activeShardCount;
         return self();
+    }
+
+    /**
+     * A shortcut for {@link #setWaitForActiveShards(ActiveShardCount)} where the numerical
+     * shard count is passed in, instead of having to first call {@link ActiveShardCount#from(int)}
+     * to get the ActiveShardCount.
+     */
+    public Self setWaitForActiveShards(final int waitForActiveShards) {
+        return setWaitForActiveShards(ActiveShardCount.from(waitForActiveShards));
     }
 
     /**
@@ -292,21 +321,71 @@ public abstract class AbstractBulkByScrollRequest<Self extends AbstractBulkByScr
     }
 
     /**
-     * Should this task persist its result after it has finished?
+     * Should this task store its result after it has finished?
      */
-    public Self setShouldPersistResult(boolean shouldPersistResult) {
-        this.shouldPersistResult = shouldPersistResult;
+    public Self setShouldStoreResult(boolean shouldStoreResult) {
+        this.shouldStoreResult = shouldStoreResult;
         return self();
     }
 
     @Override
-    public boolean getShouldPersistResult() {
-        return shouldPersistResult;
+    public boolean getShouldStoreResult() {
+        return shouldStoreResult;
+    }
+
+    /**
+     * The number of slices this task should be divided into. Defaults to 1 meaning the task isn't sliced into subtasks.
+     */
+    public Self setSlices(int slices) {
+        if (slices < 1) {
+            throw new IllegalArgumentException("[slices] must be at least 1");
+        }
+        this.slices = slices;
+        return self();
+    }
+
+    /**
+     * The number of slices this task should be divided into. Defaults to 1 meaning the task isn't sliced into subtasks.
+     */
+    public int getSlices() {
+        return slices;
+    }
+
+    /**
+     * Build a new request for a slice of the parent request.
+     */
+    abstract Self forSlice(TaskId slicingTask, SearchRequest slice);
+
+    /**
+     * Setup a clone of this request with the information needed to process a slice of it.
+     */
+    protected Self doForSlice(Self request, TaskId slicingTask) {
+        request.setAbortOnVersionConflict(abortOnVersionConflict).setRefresh(refresh).setTimeout(timeout)
+                .setWaitForActiveShards(activeShardCount).setRetryBackoffInitialTime(retryBackoffInitialTime).setMaxRetries(maxRetries)
+                // Parent task will store result
+                .setShouldStoreResult(false)
+                // Split requests per second between all slices
+                .setRequestsPerSecond(requestsPerSecond / slices)
+                // Size is split between workers. This means the size might round down!
+                .setSize(size == SIZE_ALL_MATCHES ? SIZE_ALL_MATCHES : size / slices)
+                // Sub requests don't have workers
+                .setSlices(1);
+        // Set the parent task so this task is cancelled if we cancel the parent
+        request.setParentTask(slicingTask);
+        // TODO It'd be nice not to refresh on every slice. Instead we should refresh after the sub requests finish.
+        return request;
     }
 
     @Override
     public Task createTask(long id, String type, String action, TaskId parentTaskId) {
-        return new BulkByScrollTask(id, type, action, getDescription(), parentTaskId, requestsPerSecond);
+        if (slices > 1) {
+            return new ParentBulkByScrollTask(id, type, action, getDescription(), parentTaskId, slices);
+        }
+        /* Extract the slice from the search request so it'll be available in the status. This is potentially useful for users that manually
+         * slice their search requests so they can keep track of it and **absolutely** useful for automatically sliced reindex requests so
+         * they can properly track the responses. */
+        Integer sliceId = searchRequest.source().slice() == null ? null : searchRequest.source().slice().getId();
+        return new WorkingBulkByScrollTask(id, type, action, getDescription(), parentTaskId, sliceId, requestsPerSecond);
     }
 
     @Override
@@ -318,10 +397,15 @@ public abstract class AbstractBulkByScrollRequest<Self extends AbstractBulkByScr
         size = in.readVInt();
         refresh = in.readBoolean();
         timeout = new TimeValue(in);
-        consistency = WriteConsistencyLevel.fromId(in.readByte());
+        activeShardCount = ActiveShardCount.readFrom(in);
         retryBackoffInitialTime = new TimeValue(in);
         maxRetries = in.readVInt();
         requestsPerSecond = in.readFloat();
+        if (in.getVersion().onOrAfter(BulkByScrollTask.V_5_1_0_UNRELEASED)) {
+            slices = in.readVInt();
+        } else {
+            slices = 1;
+        }
     }
 
     @Override
@@ -332,10 +416,18 @@ public abstract class AbstractBulkByScrollRequest<Self extends AbstractBulkByScr
         out.writeVInt(size);
         out.writeBoolean(refresh);
         timeout.writeTo(out);
-        out.writeByte(consistency.id());
+        activeShardCount.writeTo(out);
         retryBackoffInitialTime.writeTo(out);
         out.writeVInt(maxRetries);
         out.writeFloat(requestsPerSecond);
+        if (out.getVersion().onOrAfter(BulkByScrollTask.V_5_1_0_UNRELEASED)) {
+            out.writeVInt(slices);
+        } else {
+            if (slices > 1) {
+                throw new IllegalArgumentException("Attempting to send sliced reindex-style request to a node that doesn't support "
+                        + "it. Version is [" + out.getVersion() + "] but must be [" + BulkByScrollTask.V_5_1_0_UNRELEASED + "]");
+            }
+        }
     }
 
     /**

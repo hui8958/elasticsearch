@@ -21,27 +21,20 @@ package org.elasticsearch.script.mustache;
 
 import org.elasticsearch.action.ActionRequest;
 import org.elasticsearch.action.ActionResponse;
-import org.elasticsearch.action.search.template.MultiSearchTemplateAction;
-import org.elasticsearch.action.search.template.SearchTemplateAction;
-import org.elasticsearch.action.search.template.TransportMultiSearchTemplateAction;
-import org.elasticsearch.action.search.template.TransportSearchTemplateAction;
-import org.elasticsearch.common.network.NetworkModule;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.plugins.ActionPlugin;
 import org.elasticsearch.plugins.Plugin;
 import org.elasticsearch.plugins.ScriptPlugin;
-import org.elasticsearch.rest.action.search.template.RestDeleteSearchTemplateAction;
-import org.elasticsearch.rest.action.search.template.RestGetSearchTemplateAction;
-import org.elasticsearch.rest.action.search.template.RestMultiSearchTemplateAction;
-import org.elasticsearch.rest.action.search.template.RestPutSearchTemplateAction;
-import org.elasticsearch.rest.action.search.template.RestRenderSearchTemplateAction;
-import org.elasticsearch.rest.action.search.template.RestSearchTemplateAction;
+import org.elasticsearch.plugins.SearchPlugin;
+import org.elasticsearch.rest.RestHandler;
 import org.elasticsearch.script.ScriptEngineService;
 
 import java.util.Arrays;
 import java.util.List;
 
-public class MustachePlugin extends Plugin implements ScriptPlugin, ActionPlugin {
+import static java.util.Collections.singletonList;
+
+public class MustachePlugin extends Plugin implements ScriptPlugin, ActionPlugin, SearchPlugin {
 
     @Override
     public ScriptEngineService getScriptEngineService(Settings settings) {
@@ -49,19 +42,19 @@ public class MustachePlugin extends Plugin implements ScriptPlugin, ActionPlugin
     }
 
     @Override
-    public List<ActionHandler<? extends ActionRequest<?>, ? extends ActionResponse>> getActions() {
+    public List<ActionHandler<? extends ActionRequest, ? extends ActionResponse>> getActions() {
         return Arrays.asList(new ActionHandler<>(SearchTemplateAction.INSTANCE, TransportSearchTemplateAction.class),
                 new ActionHandler<>(MultiSearchTemplateAction.INSTANCE, TransportMultiSearchTemplateAction.class));
     }
 
-    public void onModule(NetworkModule module) {
-        if (module.isTransportClient() == false) {
-            module.registerRestHandler(RestSearchTemplateAction.class);
-            module.registerRestHandler(RestMultiSearchTemplateAction.class);
-            module.registerRestHandler(RestGetSearchTemplateAction.class);
-            module.registerRestHandler(RestPutSearchTemplateAction.class);
-            module.registerRestHandler(RestDeleteSearchTemplateAction.class);
-            module.registerRestHandler(RestRenderSearchTemplateAction.class);
-        }
+    @Override
+    public List<QuerySpec<?>> getQueries() {
+        return singletonList(new QuerySpec<>(TemplateQueryBuilder.NAME, TemplateQueryBuilder::new, TemplateQueryBuilder::fromXContent));
+    }
+
+    @Override
+    public List<Class<? extends RestHandler>> getRestHandlers() {
+        return Arrays.asList(RestSearchTemplateAction.class, RestMultiSearchTemplateAction.class, RestGetSearchTemplateAction.class,
+                RestPutSearchTemplateAction.class, RestDeleteSearchTemplateAction.class, RestRenderSearchTemplateAction.class);
     }
 }

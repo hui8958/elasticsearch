@@ -18,7 +18,6 @@
  */
 package org.elasticsearch.index.query.functionscore;
 
-import org.elasticsearch.common.ParseField;
 import org.elasticsearch.common.ParsingException;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
@@ -40,7 +39,6 @@ import java.util.Objects;
  */
 public class RandomScoreFunctionBuilder extends ScoreFunctionBuilder<RandomScoreFunctionBuilder> {
     public static final String NAME = "random_score";
-    public static final ParseField FUNCTION_NAME_FIELD = new ParseField(NAME);
     private Integer seed;
 
     public RandomScoreFunctionBuilder() {
@@ -51,12 +49,19 @@ public class RandomScoreFunctionBuilder extends ScoreFunctionBuilder<RandomScore
      */
     public RandomScoreFunctionBuilder(StreamInput in) throws IOException {
         super(in);
-        seed = in.readInt();
+        if (in.readBoolean()) {
+            seed = in.readInt();
+        }
     }
 
     @Override
     protected void doWriteTo(StreamOutput out) throws IOException {
-        out.writeInt(seed);
+        if (seed != null) {
+            out.writeBoolean(true);
+            out.writeInt(seed);
+        } else {
+            out.writeBoolean(false);
+        }
     }
 
     @Override
@@ -126,17 +131,9 @@ public class RandomScoreFunctionBuilder extends ScoreFunctionBuilder<RandomScore
             // mapper could be null if we are on a shard with no docs yet, so this won't actually be used
             return new RandomScoreFunction();
         }
-        final int salt = (context.index().getName().hashCode() << 10) | getCurrentShardId();
+        final int salt = (context.index().getName().hashCode() << 10) | context.getShardId();
         final IndexFieldData<?> uidFieldData = context.getForField(fieldType);
         return new RandomScoreFunction(this.seed == null ? hash(context.nowInMillis()) : seed, salt, uidFieldData);
-    }
-
-    /**
-     * Get the current shard's id for the seed. Protected because this method doesn't work during certain unit tests and needs to be
-     * replaced.
-     */
-    int getCurrentShardId() {
-        return SearchContext.current().indexShard().shardId().id();
     }
 
     private static int hash(long value) {

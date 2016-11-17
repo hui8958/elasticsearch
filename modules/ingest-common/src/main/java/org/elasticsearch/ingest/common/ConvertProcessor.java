@@ -20,9 +20,9 @@
 package org.elasticsearch.ingest.common;
 
 import org.elasticsearch.ingest.AbstractProcessor;
-import org.elasticsearch.ingest.AbstractProcessorFactory;
 import org.elasticsearch.ingest.ConfigurationUtils;
 import org.elasticsearch.ingest.IngestDocument;
+import org.elasticsearch.ingest.Processor;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -93,7 +93,7 @@ public final class ConvertProcessor extends AbstractProcessor {
         };
 
         @Override
-        public final String toString() {
+        public String toString() {
             return name().toLowerCase(Locale.ROOT);
         }
 
@@ -114,12 +114,14 @@ public final class ConvertProcessor extends AbstractProcessor {
     private final String field;
     private final String targetField;
     private final Type convertType;
+    private final boolean ignoreMissing;
 
-    ConvertProcessor(String tag, String field, String targetField, Type convertType) {
+    ConvertProcessor(String tag, String field, String targetField, Type convertType, boolean ignoreMissing) {
         super(tag);
         this.field = field;
         this.targetField = targetField;
         this.convertType = convertType;
+        this.ignoreMissing = ignoreMissing;
     }
 
     String getField() {
@@ -134,11 +136,18 @@ public final class ConvertProcessor extends AbstractProcessor {
         return convertType;
     }
 
+    boolean isIgnoreMissing() {
+        return ignoreMissing;
+    }
+
     @Override
     public void execute(IngestDocument document) {
-        Object oldValue = document.getFieldValue(field, Object.class);
+        Object oldValue = document.getFieldValue(field, Object.class, ignoreMissing);
         Object newValue;
-        if (oldValue == null) {
+
+        if (oldValue == null && ignoreMissing) {
+            return;
+        } else if (oldValue == null) {
             throw new IllegalArgumentException("Field [" + field + "] is null, cannot be converted to type [" + convertType + "]");
         }
 
@@ -160,14 +169,16 @@ public final class ConvertProcessor extends AbstractProcessor {
         return TYPE;
     }
 
-    public static final class Factory extends AbstractProcessorFactory<ConvertProcessor> {
+    public static final class Factory implements Processor.Factory {
         @Override
-        public ConvertProcessor doCreate(String processorTag, Map<String, Object> config) throws Exception {
+        public ConvertProcessor create(Map<String, Processor.Factory> registry, String processorTag,
+                                         Map<String, Object> config) throws Exception {
             String field = ConfigurationUtils.readStringProperty(TYPE, processorTag, config, "field");
             String typeProperty = ConfigurationUtils.readStringProperty(TYPE, processorTag, config, "type");
             String targetField = ConfigurationUtils.readStringProperty(TYPE, processorTag, config, "target_field", field);
             Type convertType = Type.fromString(processorTag, "type", typeProperty);
-            return new ConvertProcessor(processorTag, field, targetField, convertType);
+            boolean ignoreMissing = ConfigurationUtils.readBooleanProperty(TYPE, processorTag, config, "ignore_missing", false);
+            return new ConvertProcessor(processorTag, field, targetField, convertType, ignoreMissing);
         }
     }
 }

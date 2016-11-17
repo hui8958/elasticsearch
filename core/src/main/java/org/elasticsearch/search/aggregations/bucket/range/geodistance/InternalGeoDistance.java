@@ -20,11 +20,8 @@ package org.elasticsearch.search.aggregations.bucket.range.geodistance;
 
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.search.DocValueFormat;
-import org.elasticsearch.search.aggregations.AggregationStreams;
 import org.elasticsearch.search.aggregations.InternalAggregation;
 import org.elasticsearch.search.aggregations.InternalAggregations;
-import org.elasticsearch.search.aggregations.bucket.BucketStreamContext;
-import org.elasticsearch.search.aggregations.bucket.BucketStreams;
 import org.elasticsearch.search.aggregations.bucket.range.InternalRange;
 import org.elasticsearch.search.aggregations.pipeline.PipelineAggregator;
 import org.elasticsearch.search.aggregations.support.ValueType;
@@ -34,44 +31,7 @@ import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 
-/**
- *
- */
 public class InternalGeoDistance extends InternalRange<InternalGeoDistance.Bucket, InternalGeoDistance> {
-
-    public static final Type TYPE = new Type("geo_distance", "gdist");
-
-    public static final AggregationStreams.Stream STREAM = new AggregationStreams.Stream() {
-        @Override
-        public InternalGeoDistance readResult(StreamInput in) throws IOException {
-            InternalGeoDistance geoDistance = new InternalGeoDistance();
-            geoDistance.readFrom(in);
-            return geoDistance;
-        }
-    };
-
-    private final static BucketStreams.Stream<Bucket> BUCKET_STREAM = new BucketStreams.Stream<Bucket>() {
-        @Override
-        public Bucket readResult(StreamInput in, BucketStreamContext context) throws IOException {
-            Bucket buckets = new Bucket(context.keyed());
-            buckets.readFrom(in);
-            return buckets;
-        }
-
-        @Override
-        public BucketStreamContext getBucketStreamContext(Bucket bucket) {
-            BucketStreamContext context = new BucketStreamContext();
-            context.format(DocValueFormat.RAW);
-            context.keyed(bucket.keyed());
-            return context;
-        }
-    };
-
-    public static void registerStream() {
-        AggregationStreams.registerStream(STREAM, TYPE.stream());
-        BucketStreams.registerStream(BUCKET_STREAM, TYPE.stream());
-    }
-
     public static final Factory FACTORY = new Factory();
 
     static class Bucket extends InternalRange.Bucket {
@@ -99,10 +59,9 @@ public class InternalGeoDistance extends InternalRange<InternalGeoDistance.Bucke
     }
 
     public static class Factory extends InternalRange.Factory<InternalGeoDistance.Bucket, InternalGeoDistance> {
-
         @Override
         public Type type() {
-            return TYPE;
+            return GeoDistanceAggregationBuilder.TYPE;
         }
 
         @Override
@@ -140,21 +99,26 @@ public class InternalGeoDistance extends InternalRange<InternalGeoDistance.Bucke
         }
     }
 
-    InternalGeoDistance() {} // for serialization
-
     public InternalGeoDistance(String name, List<Bucket> ranges, boolean keyed,
             List<PipelineAggregator> pipelineAggregators,
             Map<String, Object> metaData) {
         super(name, ranges, DocValueFormat.RAW, keyed, pipelineAggregators, metaData);
     }
 
-    @Override
-    public Type type() {
-        return TYPE;
+    /**
+     * Read from a stream.
+     */
+    public InternalGeoDistance(StreamInput in) throws IOException {
+        super(in);
     }
 
     @Override
     public InternalRange.Factory<Bucket, InternalGeoDistance> getFactory() {
         return FACTORY;
+    }
+
+    @Override
+    public String getWriteableName() {
+        return GeoDistanceAggregationBuilder.NAME;
     }
 }

@@ -25,6 +25,7 @@ import org.elasticsearch.action.admin.cluster.reroute.ClusterRerouteResponse;
 import org.elasticsearch.action.admin.cluster.state.ClusterStateResponse;
 import org.elasticsearch.action.admin.indices.delete.DeleteIndexResponse;
 import org.elasticsearch.action.search.SearchResponse;
+import org.elasticsearch.action.support.ActiveShardCount;
 import org.elasticsearch.action.support.IndicesOptions;
 import org.elasticsearch.cluster.ClusterInfoService;
 import org.elasticsearch.cluster.ClusterState;
@@ -41,17 +42,15 @@ import org.elasticsearch.index.IndexNotFoundException;
 import org.elasticsearch.index.mapper.MapperParsingException;
 import org.elasticsearch.index.query.RangeQueryBuilder;
 import org.elasticsearch.index.query.TermsQueryBuilder;
-import org.elasticsearch.node.service.NodeService;
 import org.elasticsearch.test.ESIntegTestCase;
 import org.elasticsearch.test.ESIntegTestCase.ClusterScope;
 import org.elasticsearch.test.ESIntegTestCase.Scope;
-import org.junit.Ignore;
 
 import java.util.HashMap;
-import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static org.elasticsearch.cluster.metadata.IndexMetaData.SETTING_WAIT_FOR_ACTIVE_SHARDS;
 import static org.elasticsearch.common.xcontent.XContentFactory.jsonBuilder;
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertAcked;
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertBlocked;
@@ -232,7 +231,7 @@ public class CreateIndexIT extends ESIntegTestCase {
                 }
 
                 @Override
-                public void onFailure(Throwable e) {
+                public void onFailure(Exception e) {
                     throw new RuntimeException(e);
                 }
             }
@@ -292,7 +291,7 @@ public class CreateIndexIT extends ESIntegTestCase {
     public void testRestartIndexCreationAfterFullClusterRestart() throws Exception {
         client().admin().cluster().prepareUpdateSettings().setTransientSettings(Settings.builder().put("cluster.routing.allocation.enable",
             "none")).get();
-        client().admin().indices().prepareCreate("test").setSettings(indexSettings()).get();
+        client().admin().indices().prepareCreate("test").setWaitForActiveShards(ActiveShardCount.NONE).setSettings(indexSettings()).get();
         internalCluster().fullRestart();
         ensureGreen("test");
     }
@@ -389,16 +388,21 @@ public class CreateIndexIT extends ESIntegTestCase {
                 .put("index.blocks.write", true)).get();
         ensureGreen();
         // now merge source into a single shard index
+
+        final boolean createWithReplicas = randomBoolean();
         assertAcked(client().admin().indices().prepareShrinkIndex("source", "target")
-            .setSettings(Settings.builder().put("index.number_of_replicas", 0).build()).get());
+            .setSettings(Settings.builder().put("index.number_of_replicas", createWithReplicas ? 1 : 0).build()).get());
         ensureGreen();
         assertHitCount(client().prepareSearch("target").setSize(100).setQuery(new TermsQueryBuilder("foo", "bar")).get(), 20);
-        // bump replicas
-        client().admin().indices().prepareUpdateSettings("target")
-            .setSettings(Settings.builder()
-                .put("index.number_of_replicas", 1)).get();
-        ensureGreen();
-        assertHitCount(client().prepareSearch("target").setSize(100).setQuery(new TermsQueryBuilder("foo", "bar")).get(), 20);
+
+        if (createWithReplicas == false) {
+            // bump replicas
+            client().admin().indices().prepareUpdateSettings("target")
+                .setSettings(Settings.builder()
+                    .put("index.number_of_replicas", 1)).get();
+            ensureGreen();
+            assertHitCount(client().prepareSearch("target").setSize(100).setQuery(new TermsQueryBuilder("foo", "bar")).get(), 20);
+        }
 
         for (int i = 20; i < 40; i++) {
             client().prepareIndex("target", randomFrom("t1", "t2", "t3")).setSource("{\"foo\" : \"bar\", \"i\" : " + i + "}").get();
@@ -476,5 +480,32 @@ public class CreateIndexIT extends ESIntegTestCase {
         assertTrue("expected shard size must be set but wasn't: " + expectedShardSize, expectedShardSize > 0);
         ensureGreen();
         assertHitCount(client().prepareSearch("target").setSize(100).setQuery(new TermsQueryBuilder("foo", "bar")).get(), 20);
+    }
+
+    /**
+     * This test ensures that index creation adheres to the {@link IndexMetaData#SETTING_WAIT_FOR_ACTIVE_SHARDS}.
+     */
+    public void testDefaultWaitForActiveShardsUsesIndexSetting() throws Exception {
+        final int numReplicas = internalCluster().numDataNodes();
+        Settings settings = Settings.builder()
+                                .put(SETTING_WAIT_FOR_ACTIVE_SHARDS.getKey(), Integer.toString(numReplicas))
+                                .put(IndexMetaData.INDEX_NUMBER_OF_SHARDS_SETTING.getKey(), 1)
+                                .put(IndexMetaData.INDEX_NUMBER_OF_REPLICAS_SETTING.getKey(), numReplicas)
+                                .build();
+        assertAcked(client().admin().indices().prepareCreate("test-idx-1").setSettings(settings).get());
+
+        // all should fail
+        settings = Settings.builder()
+                       .put(settings)
+                       .put(SETTING_WAIT_FOR_ACTIVE_SHARDS.getKey(), "all")
+                       .build();
+        assertFalse(client().admin().indices().prepareCreate("test-idx-2").setSettings(settings).setTimeout("100ms").get().isShardsAcked());
+
+        // the numeric equivalent of all should also fail
+        settings = Settings.builder()
+                       .put(settings)
+                       .put(SETTING_WAIT_FOR_ACTIVE_SHARDS.getKey(), Integer.toString(numReplicas + 1))
+                       .build();
+        assertFalse(client().admin().indices().prepareCreate("test-idx-3").setSettings(settings).setTimeout("100ms").get().isShardsAcked());
     }
 }

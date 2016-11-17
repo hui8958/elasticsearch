@@ -38,9 +38,6 @@ import org.elasticsearch.indices.analysis.PreBuiltCacheFactory.CachingStrategy;
 
 import java.util.Locale;
 
-/**
- *
- */
 public enum PreBuiltTokenizers {
 
     STANDARD(CachingStrategy.LUCENE) {
@@ -129,7 +126,7 @@ public enum PreBuiltTokenizers {
 
     ;
 
-    abstract protected Tokenizer create(Version version);
+    protected abstract  Tokenizer create(Version version);
 
     protected final PreBuiltCacheFactory.PreBuiltCache<TokenizerFactory> cache;
 

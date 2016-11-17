@@ -21,6 +21,7 @@ package org.elasticsearch.percolator;
 import org.apache.lucene.search.join.ScoreMode;
 import org.elasticsearch.action.search.SearchPhaseExecutionException;
 import org.elasticsearch.action.search.SearchResponse;
+import org.elasticsearch.action.support.WriteRequest;
 import org.elasticsearch.common.bytes.BytesArray;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.xcontent.XContentBuilder;
@@ -31,12 +32,20 @@ import org.elasticsearch.index.query.MultiMatchQueryBuilder;
 import org.elasticsearch.index.query.Operator;
 import org.elasticsearch.index.query.QueryBuilders;
 import org.elasticsearch.plugins.Plugin;
-import org.elasticsearch.search.highlight.HighlightBuilder;
+import org.elasticsearch.script.MockScriptPlugin;
+import org.elasticsearch.script.Script;
+import org.elasticsearch.script.ScriptType;
+import org.elasticsearch.search.fetch.subphase.highlight.HighlightBuilder;
 import org.elasticsearch.search.sort.SortOrder;
 import org.elasticsearch.test.ESSingleNodeTestCase;
 
+import java.io.IOException;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.function.Function;
 
 import static org.elasticsearch.common.xcontent.XContentFactory.jsonBuilder;
 import static org.elasticsearch.index.query.QueryBuilders.boolQuery;
@@ -44,11 +53,18 @@ import static org.elasticsearch.index.query.QueryBuilders.commonTermsQuery;
 import static org.elasticsearch.index.query.QueryBuilders.matchAllQuery;
 import static org.elasticsearch.index.query.QueryBuilders.matchQuery;
 import static org.elasticsearch.index.query.QueryBuilders.multiMatchQuery;
+import static org.elasticsearch.index.query.QueryBuilders.rangeQuery;
 import static org.elasticsearch.index.query.QueryBuilders.spanNearQuery;
 import static org.elasticsearch.index.query.QueryBuilders.spanNotQuery;
 import static org.elasticsearch.index.query.QueryBuilders.spanTermQuery;
 import static org.elasticsearch.index.query.QueryBuilders.termQuery;
+import static org.elasticsearch.percolator.PercolateSourceBuilder.docBuilder;
+import static org.elasticsearch.percolator.PercolatorTestUtil.assertMatchCount;
+import static org.elasticsearch.percolator.PercolatorTestUtil.convertFromTextArray;
+import static org.elasticsearch.percolator.PercolatorTestUtil.preparePercolate;
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertHitCount;
+import static org.hamcrest.Matchers.arrayContainingInAnyOrder;
+import static org.hamcrest.Matchers.arrayWithSize;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.instanceOf;
@@ -57,7 +73,33 @@ public class PercolatorQuerySearchIT extends ESSingleNodeTestCase {
 
     @Override
     protected Collection<Class<? extends Plugin>> getPlugins() {
-        return Collections.singleton(PercolatorPlugin.class);
+        return Arrays.asList(PercolatorPlugin.class, CustomScriptPlugin.class);
+    }
+
+    public static class CustomScriptPlugin extends MockScriptPlugin {
+        @Override
+        protected Map<String, Function<Map<String, Object>, Object>> pluginScripts() {
+            Map<String, Function<Map<String, Object>, Object>> scripts = new HashMap<>();
+            scripts.put("1==1", vars -> Boolean.TRUE);
+            return scripts;
+        }
+    }
+
+    public void testPercolateScriptQuery() throws IOException {
+        client().admin().indices().prepareCreate("index").addMapping("type", "query", "type=percolator").get();
+        ensureGreen();
+        client().prepareIndex("index", "type", "1")
+            .setSource(jsonBuilder().startObject().field("query", QueryBuilders.scriptQuery(
+                new Script(ScriptType.INLINE, CustomScriptPlugin.NAME, "1==1", Collections.emptyMap()))).endObject())
+            .setRefreshPolicy(WriteRequest.RefreshPolicy.IMMEDIATE)
+            .execute().actionGet();
+        PercolateResponse response = preparePercolate(client())
+            .setIndices("index").setDocumentType("type")
+            .setPercolateDoc(docBuilder().setDoc(jsonBuilder().startObject().field("field1", "b").endObject()))
+            .execute().actionGet();
+        assertMatchCount(response, 1L);
+        assertThat(response.getMatches(), arrayWithSize(1));
+        assertThat(convertFromTextArray(response.getMatches(), "index"), arrayContainingInAnyOrder("1"));
     }
 
     public void testPercolatorQuery() throws Exception {
@@ -107,6 +149,102 @@ public class PercolatorQuerySearchIT extends ESSingleNodeTestCase {
         assertThat(response.getHits().getAt(0).getId(), equalTo("1"));
         assertThat(response.getHits().getAt(1).getId(), equalTo("2"));
         assertThat(response.getHits().getAt(2).getId(), equalTo("3"));
+    }
+
+    public void testPercolatorRangeQueries() throws Exception {
+        createIndex("test", client().admin().indices().prepareCreate("test")
+                .addMapping("type", "field1", "type=long", "field2", "type=double", "field3", "type=ip")
+                .addMapping("queries", "query", "type=percolator")
+        );
+
+        client().prepareIndex("test", "queries", "1")
+                .setSource(jsonBuilder().startObject().field("query", rangeQuery("field1").from(10).to(12)).endObject())
+                .get();
+        client().prepareIndex("test", "queries", "2")
+                .setSource(jsonBuilder().startObject().field("query", rangeQuery("field1").from(20).to(22)).endObject())
+                .get();
+        client().prepareIndex("test", "queries", "3")
+                .setSource(jsonBuilder().startObject().field("query", boolQuery()
+                        .must(rangeQuery("field1").from(10).to(12))
+                        .must(rangeQuery("field1").from(12).to(14))
+                ).endObject()).get();
+        client().admin().indices().prepareRefresh().get();
+        client().prepareIndex("test", "queries", "4")
+                .setSource(jsonBuilder().startObject().field("query", rangeQuery("field2").from(10).to(12)).endObject())
+                .get();
+        client().prepareIndex("test", "queries", "5")
+                .setSource(jsonBuilder().startObject().field("query", rangeQuery("field2").from(20).to(22)).endObject())
+                .get();
+        client().prepareIndex("test", "queries", "6")
+                .setSource(jsonBuilder().startObject().field("query", boolQuery()
+                        .must(rangeQuery("field2").from(10).to(12))
+                        .must(rangeQuery("field2").from(12).to(14))
+                ).endObject()).get();
+        client().admin().indices().prepareRefresh().get();
+        client().prepareIndex("test", "queries", "7")
+                .setSource(jsonBuilder().startObject()
+                        .field("query", rangeQuery("field3").from("192.168.1.0").to("192.168.1.5"))
+                        .endObject())
+                .get();
+        client().prepareIndex("test", "queries", "8")
+                .setSource(jsonBuilder().startObject()
+                        .field("query", rangeQuery("field3").from("192.168.1.20").to("192.168.1.30"))
+                        .endObject())
+                .get();
+        client().prepareIndex("test", "queries", "9")
+                .setSource(jsonBuilder().startObject().field("query", boolQuery()
+                        .must(rangeQuery("field3").from("192.168.1.0").to("192.168.1.5"))
+                        .must(rangeQuery("field3").from("192.168.1.5").to("192.168.1.10"))
+                ).endObject()).get();
+        client().admin().indices().prepareRefresh().get();
+
+        // Test long range:
+        BytesReference source = jsonBuilder().startObject().field("field1", 12).endObject().bytes();
+        SearchResponse response = client().prepareSearch()
+                .setQuery(new PercolateQueryBuilder("query", "type", source))
+                .get();
+        assertHitCount(response, 2);
+        assertThat(response.getHits().getAt(0).getId(), equalTo("3"));
+        assertThat(response.getHits().getAt(1).getId(), equalTo("1"));
+
+        source = jsonBuilder().startObject().field("field1", 11).endObject().bytes();
+        response = client().prepareSearch()
+                .setQuery(new PercolateQueryBuilder("query", "type", source))
+                .get();
+        assertHitCount(response, 1);
+        assertThat(response.getHits().getAt(0).getId(), equalTo("1"));
+
+        // Test double range:
+        source = jsonBuilder().startObject().field("field2", 12).endObject().bytes();
+        response = client().prepareSearch()
+                .setQuery(new PercolateQueryBuilder("query", "type", source))
+                .get();
+        assertHitCount(response, 2);
+        assertThat(response.getHits().getAt(0).getId(), equalTo("6"));
+        assertThat(response.getHits().getAt(1).getId(), equalTo("4"));
+
+        source = jsonBuilder().startObject().field("field2", 11).endObject().bytes();
+        response = client().prepareSearch()
+                .setQuery(new PercolateQueryBuilder("query", "type", source))
+                .get();
+        assertHitCount(response, 1);
+        assertThat(response.getHits().getAt(0).getId(), equalTo("4"));
+
+        // Test IP range:
+        source = jsonBuilder().startObject().field("field3", "192.168.1.5").endObject().bytes();
+        response = client().prepareSearch()
+                .setQuery(new PercolateQueryBuilder("query", "type", source))
+                .get();
+        assertHitCount(response, 2);
+        assertThat(response.getHits().getAt(0).getId(), equalTo("9"));
+        assertThat(response.getHits().getAt(1).getId(), equalTo("7"));
+
+        source = jsonBuilder().startObject().field("field3", "192.168.1.4").endObject().bytes();
+        response = client().prepareSearch()
+                .setQuery(new PercolateQueryBuilder("query", "type", source))
+                .get();
+        assertHitCount(response, 1);
+        assertThat(response.getHits().getAt(0).getId(), equalTo("7"));
     }
 
     public void testPercolatorQueryExistingDocument() throws Exception {

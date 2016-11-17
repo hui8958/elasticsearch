@@ -35,9 +35,6 @@ import java.io.IOException;
 import java.util.Iterator;
 import java.util.Set;
 
-/**
- *
- */
 public final class CompletionTokenStream extends TokenStream {
 
     private final PayloadAttribute payloadAttr = addAttribute(PayloadAttribute.class);
@@ -108,8 +105,8 @@ public final class CompletionTokenStream extends TokenStream {
         input.close();
     }
 
-    public static interface ToFiniteStrings {
-        public Set<IntsRef> toFiniteStrings(TokenStream stream) throws IOException;
+    public interface ToFiniteStrings {
+        Set<IntsRef> toFiniteStrings(TokenStream stream) throws IOException;
     }
 
     @Override
@@ -129,9 +126,9 @@ public final class CompletionTokenStream extends TokenStream {
         /**
          * Return the builder from which the term is derived.
          */
-        public BytesRefBuilder builder();
+        BytesRefBuilder builder();
 
-        public CharSequence toUTF16();
+        CharSequence toUTF16();
     }
 
     public static final class ByteTermAttributeImpl extends AttributeImpl implements ByteTermAttribute, TermToBytesRefAttribute {

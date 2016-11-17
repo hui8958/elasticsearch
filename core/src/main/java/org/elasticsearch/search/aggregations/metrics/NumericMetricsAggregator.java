@@ -26,9 +26,6 @@ import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 
-/**
- *
- */
 public abstract class NumericMetricsAggregator extends MetricsAggregator {
 
     private NumericMetricsAggregator(String name, AggregationContext context, Aggregator parent,
@@ -36,7 +33,7 @@ public abstract class NumericMetricsAggregator extends MetricsAggregator {
         super(name, context, parent, pipelineAggregators, metaData);
     }
 
-    public static abstract class SingleValue extends NumericMetricsAggregator {
+    public abstract static class SingleValue extends NumericMetricsAggregator {
 
         protected SingleValue(String name, AggregationContext context, Aggregator parent, List<PipelineAggregator> pipelineAggregators,
                 Map<String, Object> metaData) throws IOException {
@@ -46,7 +43,7 @@ public abstract class NumericMetricsAggregator extends MetricsAggregator {
         public abstract double metric(long owningBucketOrd);
     }
 
-    public static abstract class MultiValue extends NumericMetricsAggregator {
+    public abstract static class MultiValue extends NumericMetricsAggregator {
 
         protected MultiValue(String name, AggregationContext context, Aggregator parent, List<PipelineAggregator> pipelineAggregators,
                 Map<String, Object> metaData) throws IOException {

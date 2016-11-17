@@ -39,7 +39,7 @@ import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.node.NodeClosedException;
 import org.elasticsearch.threadpool.ThreadPool;
-import org.elasticsearch.transport.BaseTransportResponseHandler;
+import org.elasticsearch.transport.TransportResponseHandler;
 import org.elasticsearch.transport.ConnectTransportException;
 import org.elasticsearch.transport.TransportChannel;
 import org.elasticsearch.transport.TransportException;
@@ -49,9 +49,6 @@ import org.elasticsearch.transport.TransportService;
 
 import java.util.function.Supplier;
 
-/**
- *
- */
 public abstract class TransportInstanceSingleOperationAction<Request extends InstanceShardOperationRequest<Request>, Response extends ActionResponse>
         extends HandledTransportAction<Request, Response> {
     protected final ClusterService clusterService;
@@ -95,7 +92,7 @@ public abstract class TransportInstanceSingleOperationAction<Request extends Ins
      */
     protected abstract void resolveRequest(ClusterState state, Request request);
 
-    protected boolean retryOnFailure(Throwable e) {
+    protected boolean retryOnFailure(Exception e) {
         return false;
     }
 
@@ -127,9 +124,10 @@ public abstract class TransportInstanceSingleOperationAction<Request extends Ins
         }
 
         protected void doStart() {
-            nodes = observer.observedState().nodes();
+            final ClusterState clusterState = observer.observedState().getClusterState();
+            nodes = clusterState.nodes();
             try {
-                ClusterBlockException blockException = checkGlobalBlock(observer.observedState());
+                ClusterBlockException blockException = checkGlobalBlock(clusterState);
                 if (blockException != null) {
                     if (blockException.retryable()) {
                         retry(blockException);
@@ -138,9 +136,9 @@ public abstract class TransportInstanceSingleOperationAction<Request extends Ins
                         throw blockException;
                     }
                 }
-                request.concreteIndex(indexNameExpressionResolver.concreteSingleIndex(observer.observedState(), request).getName());
-                resolveRequest(observer.observedState(), request);
-                blockException = checkRequestBlock(observer.observedState(), request);
+                request.concreteIndex(indexNameExpressionResolver.concreteSingleIndex(clusterState, request).getName());
+                resolveRequest(clusterState, request);
+                blockException = checkRequestBlock(clusterState, request);
                 if (blockException != null) {
                     if (blockException.retryable()) {
                         retry(blockException);
@@ -149,8 +147,8 @@ public abstract class TransportInstanceSingleOperationAction<Request extends Ins
                         throw blockException;
                     }
                 }
-                shardIt = shards(observer.observedState(), request);
-            } catch (Throwable e) {
+                shardIt = shards(clusterState, request);
+            } catch (Exception e) {
                 listener.onFailure(e);
                 return;
             }
@@ -174,7 +172,7 @@ public abstract class TransportInstanceSingleOperationAction<Request extends Ins
 
             request.shardId = shardIt.shardId();
             DiscoveryNode node = nodes.get(shard.currentNodeId());
-            transportService.sendRequest(node, shardActionName, request, transportOptions(), new BaseTransportResponseHandler<Response>() {
+            transportService.sendRequest(node, shardActionName, request, transportOptions(), new TransportResponseHandler<Response>() {
 
                 @Override
                 public Response newInstance() {
@@ -193,11 +191,11 @@ public abstract class TransportInstanceSingleOperationAction<Request extends Ins
 
                 @Override
                 public void handleException(TransportException exp) {
-                    Throwable cause = exp.unwrapCause();
+                    final Throwable cause = exp.unwrapCause();
                     // if we got disconnected from the node, or the node / shard is not in the right state (being closed)
                     if (cause instanceof ConnectTransportException || cause instanceof NodeClosedException ||
                             retryOnFailure(exp)) {
-                        retry(cause);
+                        retry((Exception) cause);
                     } else {
                         listener.onFailure(exp);
                     }
@@ -205,10 +203,10 @@ public abstract class TransportInstanceSingleOperationAction<Request extends Ins
             });
         }
 
-        void retry(final @Nullable Throwable failure) {
+        void retry(@Nullable final Exception failure) {
             if (observer.isTimedOut()) {
                 // we running as a last attempt after a timeout has happened. don't retry
-                Throwable listenFailure = failure;
+                Exception listenFailure = failure;
                 if (listenFailure == null) {
                     if (shardIt == null) {
                         listenFailure = new UnavailableShardsException(request.concreteIndex(), -1, "Timeout waiting for [{}], request: {}", request.timeout(), actionName);
@@ -249,17 +247,18 @@ public abstract class TransportInstanceSingleOperationAction<Request extends Ins
                 public void onResponse(Response response) {
                     try {
                         channel.sendResponse(response);
-                    } catch (Throwable e) {
+                    } catch (Exception e) {
                         onFailure(e);
                     }
                 }
 
                 @Override
-                public void onFailure(Throwable e) {
+                public void onFailure(Exception e) {
                     try {
                         channel.sendResponse(e);
-                    } catch (Exception e1) {
-                        logger.warn("failed to send response for get", e1);
+                    } catch (Exception inner) {
+                        inner.addSuppressed(e);
+                        logger.warn("failed to send response for get", inner);
                     }
                 }
             });

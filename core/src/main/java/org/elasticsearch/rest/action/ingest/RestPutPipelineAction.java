@@ -20,31 +20,32 @@
 package org.elasticsearch.rest.action.ingest;
 
 import org.elasticsearch.action.ingest.PutPipelineRequest;
-import org.elasticsearch.client.Client;
+import org.elasticsearch.client.node.NodeClient;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.rest.BaseRestHandler;
-import org.elasticsearch.rest.RestChannel;
 import org.elasticsearch.rest.RestController;
 import org.elasticsearch.rest.RestRequest;
-import org.elasticsearch.rest.action.support.AcknowledgedRestListener;
-import org.elasticsearch.rest.action.support.RestActions;
+import org.elasticsearch.rest.action.AcknowledgedRestListener;
+import org.elasticsearch.rest.action.RestActions;
+
+import java.io.IOException;
 
 
 public class RestPutPipelineAction extends BaseRestHandler {
 
     @Inject
-    public RestPutPipelineAction(Settings settings, RestController controller, Client client) {
-        super(settings, client);
+    public RestPutPipelineAction(Settings settings, RestController controller) {
+        super(settings);
         controller.registerHandler(RestRequest.Method.PUT, "/_ingest/pipeline/{id}", this);
     }
 
     @Override
-    protected void handleRequest(RestRequest restRequest, RestChannel channel, Client client) throws Exception {
+    public RestChannelConsumer prepareRequest(RestRequest restRequest, NodeClient client) throws IOException {
         PutPipelineRequest request = new PutPipelineRequest(restRequest.param("id"), RestActions.getRestContent(restRequest));
         request.masterNodeTimeout(restRequest.paramAsTime("master_timeout", request.masterNodeTimeout()));
         request.timeout(restRequest.paramAsTime("timeout", request.timeout()));
-        client.admin().cluster().putPipeline(request, new AcknowledgedRestListener<>(channel));
+        return channel -> client.admin().cluster().putPipeline(request, new AcknowledgedRestListener<>(channel));
     }
 
 }

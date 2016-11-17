@@ -24,9 +24,9 @@ import org.elasticsearch.action.admin.cluster.node.info.NodesInfoResponse;
 import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.util.concurrent.EsExecutors;
+import org.elasticsearch.test.ESIntegTestCase;
 import org.elasticsearch.test.ESIntegTestCase.ClusterScope;
 import org.elasticsearch.test.ESIntegTestCase.Scope;
-import org.elasticsearch.test.ESIntegTestCase;
 
 import java.util.List;
 
@@ -36,9 +36,6 @@ import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.notNullValue;
 
-/**
- *
- */
 @ClusterScope(scope= Scope.TEST, numDataNodes = 0)
 public class SimpleNodesInfoIT extends ESIntegTestCase {
 
@@ -97,22 +94,22 @@ public class SimpleNodesInfoIT extends ESIntegTestCase {
         assertThat(response.getNodes().size(), is(2));
         assertThat(response.getNodesMap().get(server1NodeId), notNullValue());
         assertNotNull(response.getNodesMap().get(server1NodeId).getTotalIndexingBuffer());
-        assertThat(response.getNodesMap().get(server1NodeId).getTotalIndexingBuffer().bytes(), greaterThan(0L));
+        assertThat(response.getNodesMap().get(server1NodeId).getTotalIndexingBuffer().getBytes(), greaterThan(0L));
 
         assertThat(response.getNodesMap().get(server2NodeId), notNullValue());
         assertNotNull(response.getNodesMap().get(server2NodeId).getTotalIndexingBuffer());
-        assertThat(response.getNodesMap().get(server2NodeId).getTotalIndexingBuffer().bytes(), greaterThan(0L));
+        assertThat(response.getNodesMap().get(server2NodeId).getTotalIndexingBuffer().getBytes(), greaterThan(0L));
 
         // again, using only the indices flag
         response = client().admin().cluster().prepareNodesInfo().clear().setIndices(true).execute().actionGet();
         assertThat(response.getNodes().size(), is(2));
         assertThat(response.getNodesMap().get(server1NodeId), notNullValue());
         assertNotNull(response.getNodesMap().get(server1NodeId).getTotalIndexingBuffer());
-        assertThat(response.getNodesMap().get(server1NodeId).getTotalIndexingBuffer().bytes(), greaterThan(0L));
+        assertThat(response.getNodesMap().get(server1NodeId).getTotalIndexingBuffer().getBytes(), greaterThan(0L));
 
         assertThat(response.getNodesMap().get(server2NodeId), notNullValue());
         assertNotNull(response.getNodesMap().get(server2NodeId).getTotalIndexingBuffer());
-        assertThat(response.getNodesMap().get(server2NodeId).getTotalIndexingBuffer().bytes(), greaterThan(0L));
+        assertThat(response.getNodesMap().get(server2NodeId).getTotalIndexingBuffer().getBytes(), greaterThan(0L));
     }
 
     public void testAllocatedProcessors() throws Exception {

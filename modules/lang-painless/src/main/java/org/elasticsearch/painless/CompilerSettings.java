@@ -19,10 +19,18 @@
 
 package org.elasticsearch.painless;
 
+import org.elasticsearch.common.settings.Setting;
+import org.elasticsearch.common.settings.Setting.Property;
+
 /**
  * Settings to use when compiling a script.
  */
 public final class CompilerSettings {
+    /**
+     * Are regexes enabled? This is a node level setting because regexes break out of painless's lovely sandbox and can cause stack
+     * overflows and we can't analyze the regex to be sure it won't.
+     */
+    public static final Setting<Boolean> REGEX_ENABLED = Setting.boolSetting("script.painless.regex.enabled", false, Property.NodeScope);
 
     /**
      * Constant to be used when specifying the maximum loop counter when compiling a script.
@@ -56,11 +64,17 @@ public final class CompilerSettings {
     private int initialCallSiteDepth = 0;
 
     /**
+     * Are regexes enabled? They are currently disabled by default because they break out of the loop counter and even fairly simple
+     * <strong>looking</strong> regexes can cause stack overflows.
+     */
+    private boolean regexesEnabled = false;
+
+    /**
      * Returns the value for the cumulative total number of statements that can be made in all loops
      * in a script before an exception is thrown.  This attempts to prevent infinite loops.  Note if
      * the counter is set to 0, no loop counter will be written.
      */
-    public final int getMaxLoopCounter() {
+    public int getMaxLoopCounter() {
         return maxLoopCounter;
     }
 
@@ -68,7 +82,7 @@ public final class CompilerSettings {
      * Set the cumulative total number of statements that can be made in all loops.
      * @see #getMaxLoopCounter
      */
-    public final void setMaxLoopCounter(int max) {
+    public void setMaxLoopCounter(int max) {
         this.maxLoopCounter = max;
     }
 
@@ -103,5 +117,21 @@ public final class CompilerSettings {
      */
     public void setInitialCallSiteDepth(int depth) {
         this.initialCallSiteDepth = depth;
+    }
+
+    /**
+     * Are regexes enabled? They are currently disabled by default because they break out of the loop counter and even fairly simple
+     * <strong>looking</strong> regexes can cause stack overflows.
+     */
+    public boolean areRegexesEnabled() {
+        return regexesEnabled;
+    }
+
+    /**
+     * Are regexes enabled? They are currently disabled by default because they break out of the loop counter and even fairly simple
+     * <strong>looking</strong> regexes can cause stack overflows.
+     */
+    public void setRegexesEnabled(boolean regexesEnabled) {
+        this.regexesEnabled = regexesEnabled;
     }
 }

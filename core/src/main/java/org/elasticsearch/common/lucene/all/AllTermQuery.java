@@ -64,6 +64,10 @@ public final class AllTermQuery extends Query {
         this.term = term;
     }
 
+    public Term getTerm() {
+        return term;
+    }
+
     @Override
     public boolean equals(Object obj) {
         if (sameClassAs(obj) == false) {
@@ -117,12 +121,12 @@ public final class AllTermQuery extends Query {
         return new Weight(this) {
 
             @Override
-            public final float getValueForNormalization() throws IOException {
+            public float getValueForNormalization() throws IOException {
                 return stats.getValueForNormalization();
             }
 
             @Override
-            public final void normalize(float norm, float topLevelBoost) {
+            public void normalize(float norm, float topLevelBoost) {
                 stats.normalize(norm, topLevelBoost);
             }
 

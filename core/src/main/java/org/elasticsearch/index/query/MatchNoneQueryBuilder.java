@@ -20,7 +20,6 @@
 package org.elasticsearch.index.query;
 
 import org.apache.lucene.search.Query;
-import org.elasticsearch.common.ParseField;
 import org.elasticsearch.common.ParsingException;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
@@ -35,9 +34,7 @@ import java.util.Optional;
  * A query that matches no document.
  */
 public class MatchNoneQueryBuilder extends AbstractQueryBuilder<MatchNoneQueryBuilder> {
-
     public static final String NAME = "match_none";
-    public static final ParseField QUERY_NAME_FIELD = new ParseField(NAME);
 
     public MatchNoneQueryBuilder() {
     }

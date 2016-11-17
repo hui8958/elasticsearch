@@ -26,16 +26,13 @@ import java.util.HashMap;
 
 import static org.hamcrest.Matchers.equalTo;
 
-/**
- *
- */
 public abstract class BaseMatrixStatsTestCase extends ESTestCase {
     protected final int numObs = atLeast(10000);
     protected final ArrayList<Double> fieldA = new ArrayList<>(numObs);
     protected final ArrayList<Double> fieldB = new ArrayList<>(numObs);
     protected final MultiPassStats actualStats = new MultiPassStats();
-    protected final static String fieldAKey = "fieldA";
-    protected final static String fieldBKey = "fieldB";
+    protected static final String fieldAKey = "fieldA";
+    protected static final String fieldBKey = "fieldB";
 
     @Before
     public void setup() {

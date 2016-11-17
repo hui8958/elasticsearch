@@ -39,7 +39,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
-public class TimeValue implements Writeable {
+public class TimeValue implements Writeable, Comparable<TimeValue> {
 
     /** How many nano-seconds in one milli-second */
     public static final long NSEC_PER_MSEC = TimeUnit.NANOSECONDS.convert(1, TimeUnit.MILLISECONDS);
@@ -249,6 +249,12 @@ public class TimeValue implements Writeable {
         return PeriodFormat.getDefault().withParseType(type).print(period);
     }
 
+    /**
+     * Returns a {@link String} representation of the current {@link TimeValue}.
+     *
+     * Note that this method might produce fractional time values (ex 1.6m) which cannot be
+     * parsed by method like {@link TimeValue#parse(String, String, int)}.
+     */
     @Override
     public String toString() {
         if (duration < 0) {
@@ -317,40 +323,49 @@ public class TimeValue implements Writeable {
         if (sValue == null) {
             return defaultValue;
         }
-        try {
-            String lowerSValue = sValue.toLowerCase(Locale.ROOT).trim();
-            if (lowerSValue.endsWith("nanos")) {
-                return new TimeValue(parse(lowerSValue, 5), TimeUnit.NANOSECONDS);
-            } else if (lowerSValue.endsWith("micros")) {
-                return new TimeValue(parse(lowerSValue, 6), TimeUnit.MICROSECONDS);
-            } else if (lowerSValue.endsWith("ms")) {
-                return new TimeValue(parse(lowerSValue, 2), TimeUnit.MILLISECONDS);
-            } else if (lowerSValue.endsWith("s")) {
-                return new TimeValue(parse(lowerSValue, 1), TimeUnit.SECONDS);
-            } else if (lowerSValue.endsWith("m")) {
-                return new TimeValue(parse(lowerSValue, 1), TimeUnit.MINUTES);
-            } else if (lowerSValue.endsWith("h")) {
-                return new TimeValue(parse(lowerSValue, 1), TimeUnit.HOURS);
-            } else if (lowerSValue.endsWith("d")) {
-                return new TimeValue(parse(lowerSValue, 1), TimeUnit.DAYS);
-            } else if (lowerSValue.matches("-0*1")) {
-                return TimeValue.MINUS_ONE;
-            } else if (lowerSValue.matches("0+")) {
-                return TimeValue.ZERO;
-            } else {
-                // Missing units:
-                throw new ElasticsearchParseException(
-                        "failed to parse setting [{}] with value [{}] as a time value: unit is missing or unrecognized",
-                        settingName,
-                        sValue);
-            }
-        } catch (NumberFormatException e) {
-            throw new ElasticsearchParseException("failed to parse [{}]", e, sValue);
+        final String normalized = sValue.toLowerCase(Locale.ROOT).trim();
+        if (normalized.endsWith("nanos")) {
+            return new TimeValue(parse(sValue, normalized, 5), TimeUnit.NANOSECONDS);
+        } else if (normalized.endsWith("micros")) {
+            return new TimeValue(parse(sValue, normalized, 6), TimeUnit.MICROSECONDS);
+        } else if (normalized.endsWith("ms")) {
+            return new TimeValue(parse(sValue, normalized, 2), TimeUnit.MILLISECONDS);
+        } else if (normalized.endsWith("s")) {
+            return new TimeValue(parse(sValue, normalized, 1), TimeUnit.SECONDS);
+        } else if (sValue.endsWith("m")) {
+            // parsing minutes should be case sensitive as `M` is generally
+            // accepted to mean months not minutes. This is the only case where
+            // the upper and lower case forms indicate different time units
+            return new TimeValue(parse(sValue, normalized, 1), TimeUnit.MINUTES);
+        } else if (normalized.endsWith("h")) {
+            return new TimeValue(parse(sValue, normalized, 1), TimeUnit.HOURS);
+        } else if (normalized.endsWith("d")) {
+            return new TimeValue(parse(sValue, normalized, 1), TimeUnit.DAYS);
+        } else if (normalized.matches("-0*1")) {
+            return TimeValue.MINUS_ONE;
+        } else if (normalized.matches("0+")) {
+            return TimeValue.ZERO;
+        } else {
+            // Missing units:
+            throw new ElasticsearchParseException(
+                "failed to parse setting [{}] with value [{}] as a time value: unit is missing or unrecognized",
+                settingName,
+                sValue);
         }
     }
 
-    private static long parse(String s, int suffixLength) {
-        return Long.parseLong(s.substring(0, s.length() - suffixLength).trim());
+    private static long parse(final String initialInput, final String normalized, final int suffixLength) {
+        final String s = normalized.substring(0, normalized.length() - suffixLength).trim();
+        try {
+            return Long.parseLong(s);
+        } catch (final NumberFormatException e) {
+            try {
+                @SuppressWarnings("unused") final double ignored = Double.parseDouble(s);
+                throw new ElasticsearchParseException("failed to parse [{}], fractional time values are not supported", e, initialInput);
+            } catch (final NumberFormatException ignored) {
+                throw new ElasticsearchParseException("failed to parse [{}]", e, initialInput);
+            }
+        }
     }
 
     private static final long C0 = 1L;
@@ -366,17 +381,22 @@ public class TimeValue implements Writeable {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
 
-        TimeValue timeValue = (TimeValue) o;
-        return timeUnit.toNanos(duration) == timeValue.timeUnit.toNanos(timeValue.duration);
+        return this.compareTo(((TimeValue) o)) == 0;
     }
 
     @Override
     public int hashCode() {
-        long normalized = timeUnit.toNanos(duration);
-        return Long.hashCode(normalized);
+        return Double.hashCode(((double) duration) * timeUnit.toNanos(1));
     }
 
     public static long nsecToMSec(long ns) {
         return ns / NSEC_PER_MSEC;
+    }
+
+    @Override
+    public int compareTo(TimeValue timeValue) {
+        double thisValue = ((double) duration) * timeUnit.toNanos(1);
+        double otherValue = ((double) timeValue.duration) * timeValue.timeUnit.toNanos(1);
+        return Double.compare(thisValue, otherValue);
     }
 }

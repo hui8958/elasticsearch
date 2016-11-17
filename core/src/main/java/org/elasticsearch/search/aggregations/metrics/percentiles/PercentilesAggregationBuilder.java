@@ -19,14 +19,13 @@
 
 package org.elasticsearch.search.aggregations.metrics.percentiles;
 
-import org.elasticsearch.common.ParseField;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.search.aggregations.AggregatorFactories.Builder;
 import org.elasticsearch.search.aggregations.AggregatorFactory;
+import org.elasticsearch.search.aggregations.InternalAggregation.Type;
 import org.elasticsearch.search.aggregations.metrics.percentiles.hdr.HDRPercentilesAggregatorFactory;
-import org.elasticsearch.search.aggregations.metrics.percentiles.tdigest.InternalTDigestPercentiles;
 import org.elasticsearch.search.aggregations.metrics.percentiles.tdigest.TDigestPercentilesAggregatorFactory;
 import org.elasticsearch.search.aggregations.support.AggregationContext;
 import org.elasticsearch.search.aggregations.support.ValueType;
@@ -42,8 +41,8 @@ import java.util.Arrays;
 import java.util.Objects;
 
 public class PercentilesAggregationBuilder extends LeafOnly<ValuesSource.Numeric, PercentilesAggregationBuilder> {
-    public static final String NAME = InternalTDigestPercentiles.TYPE.name();
-    public static final ParseField AGGREGATION_NAME_FIELD = new ParseField(NAME);
+    public static final String NAME = Percentiles.TYPE_NAME;
+    public static final Type TYPE = new Type(NAME);
 
     private double[] percents = PercentilesParser.DEFAULT_PERCENTS;
     private PercentilesMethod method = PercentilesMethod.TDIGEST;
@@ -52,14 +51,14 @@ public class PercentilesAggregationBuilder extends LeafOnly<ValuesSource.Numeric
     private boolean keyed = true;
 
     public PercentilesAggregationBuilder(String name) {
-        super(name, InternalTDigestPercentiles.TYPE, ValuesSourceType.NUMERIC, ValueType.NUMERIC);
+        super(name, TYPE, ValuesSourceType.NUMERIC, ValueType.NUMERIC);
     }
 
     /**
      * Read from a stream.
      */
     public PercentilesAggregationBuilder(StreamInput in) throws IOException {
-        super(in, InternalTDigestPercentiles.TYPE, ValuesSourceType.NUMERIC, ValueType.NUMERIC);
+        super(in, TYPE, ValuesSourceType.NUMERIC, ValueType.NUMERIC);
         percents = in.readDoubleArray();
         keyed = in.readBoolean();
         numberOfSignificantValueDigits = in.readVInt();
@@ -181,7 +180,7 @@ public class PercentilesAggregationBuilder extends LeafOnly<ValuesSource.Numeric
 
     @Override
     protected XContentBuilder doXContentBody(XContentBuilder builder, Params params) throws IOException {
-        builder.field(PercentilesParser.PERCENTS_FIELD.getPreferredName(), percents);
+        builder.array(PercentilesParser.PERCENTS_FIELD.getPreferredName(), percents);
         builder.field(AbstractPercentilesParser.KEYED_FIELD.getPreferredName(), keyed);
         builder.startObject(method.getName());
         if (method == PercentilesMethod.TDIGEST) {

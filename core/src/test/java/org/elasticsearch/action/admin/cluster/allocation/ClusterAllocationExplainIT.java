@@ -19,8 +19,8 @@
 
 package org.elasticsearch.action.admin.cluster.allocation;
 
-import org.elasticsearch.action.admin.cluster.node.stats.NodesStatsResponse;
 import org.elasticsearch.action.admin.indices.shards.IndicesShardStoresResponse;
+import org.elasticsearch.action.support.ActiveShardCount;
 import org.elasticsearch.client.Requests;
 import org.elasticsearch.cluster.metadata.IndexMetaData;
 import org.elasticsearch.cluster.node.DiscoveryNode;
@@ -28,11 +28,11 @@ import org.elasticsearch.cluster.routing.UnassignedInfo;
 import org.elasticsearch.cluster.routing.allocation.decider.Decision;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.test.ESIntegTestCase;
+import org.elasticsearch.test.junit.annotations.TestLogging;
 
-import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
+import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertAcked;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.greaterThan;
@@ -42,31 +42,27 @@ import static org.hamcrest.Matchers.greaterThan;
  */
 @ESIntegTestCase.ClusterScope(scope = ESIntegTestCase.Scope.TEST, numDataNodes = 0)
 public final class ClusterAllocationExplainIT extends ESIntegTestCase {
+    @TestLogging("_root:DEBUG")
     public void testDelayShards() throws Exception {
         logger.info("--> starting 3 nodes");
-        List<String> nodes = internalCluster().startNodesAsync(3).get();
+        internalCluster().startNodesAsync(3).get();
 
         // Wait for all 3 nodes to be up
         logger.info("--> waiting for 3 nodes to be up");
-        assertBusy(new Runnable() {
-            @Override
-            public void run() {
-                NodesStatsResponse resp = client().admin().cluster().prepareNodesStats().get();
-                assertThat(resp.getNodes().size(), equalTo(3));
-            }
-        });
+        ensureStableCluster(3);
 
         logger.info("--> creating 'test' index");
-        prepareCreate("test").setSettings(Settings.builder()
+        assertAcked(prepareCreate("test").setSettings(Settings.builder()
                 .put(UnassignedInfo.INDEX_DELAYED_NODE_LEFT_TIMEOUT_SETTING.getKey(), "1m")
                 .put(IndexMetaData.INDEX_NUMBER_OF_SHARDS_SETTING.getKey(), 5)
-                .put(IndexMetaData.INDEX_NUMBER_OF_REPLICAS_SETTING.getKey(), 1)).get();
-        ensureGreen("test");
+                .put(IndexMetaData.INDEX_NUMBER_OF_REPLICAS_SETTING.getKey(), 1))
+                .setWaitForActiveShards(ActiveShardCount.ALL).get());
 
         logger.info("--> stopping a random node");
         assertTrue(internalCluster().stopRandomDataNode());
 
-        ensureYellow("test");
+        logger.info("--> waiting for the master to remove the stopped node from the cluster state");
+        ensureStableCluster(2);
 
         ClusterAllocationExplainResponse resp = client().admin().cluster().prepareAllocationExplain().useAnyUnassignedShard().get();
         ClusterAllocationExplanation cae = resp.getExplanation();
@@ -92,6 +88,7 @@ public final class ClusterAllocationExplainIT extends ESIntegTestCase {
                 .setSettings(Settings.builder()
                         .put("index.number_of_shards", 5)
                         .put("index.number_of_replicas", 1))
+                .setWaitForActiveShards(ActiveShardCount.ALL)  // wait on all shards
                 .get();
 
         client().admin().indices().prepareCreate("only-baz")
@@ -99,6 +96,7 @@ public final class ClusterAllocationExplainIT extends ESIntegTestCase {
                         .put("index.routing.allocation.include.bar", "baz")
                         .put("index.number_of_shards", 5)
                         .put("index.number_of_replicas", 1))
+                .setWaitForActiveShards(ActiveShardCount.ALL)
                 .get();
 
         client().admin().indices().prepareCreate("only-foo")
@@ -107,9 +105,6 @@ public final class ClusterAllocationExplainIT extends ESIntegTestCase {
                         .put("index.number_of_shards", 1)
                         .put("index.number_of_replicas", 1))
                 .get();
-
-        ensureGreen("anywhere", "only-baz");
-        ensureYellow("only-foo");
 
         ClusterAllocationExplainResponse resp = client().admin().cluster().prepareAllocationExplain()
                 .setIndex("only-foo")
@@ -126,7 +121,6 @@ public final class ClusterAllocationExplainIT extends ESIntegTestCase {
 
         Map<DiscoveryNode, NodeExplanation> explanations = cae.getNodeExplanations();
 
-        Float noAttrWeight = -1f;
         Float barAttrWeight = -1f;
         Float fooBarAttrWeight = -1f;
         for (Map.Entry<DiscoveryNode, NodeExplanation> entry : explanations.entrySet()) {
@@ -134,7 +128,6 @@ public final class ClusterAllocationExplainIT extends ESIntegTestCase {
             String nodeName = node.getName();
             NodeExplanation explanation = entry.getValue();
             ClusterAllocationExplanation.FinalDecision finalDecision = explanation.getFinalDecision();
-            String finalExplanation = explanation.getFinalExplanation();
             ClusterAllocationExplanation.StoreCopy storeCopy = explanation.getStoreCopy();
             Decision d = explanation.getDecision();
             float weight = explanation.getWeight();
@@ -143,7 +136,6 @@ public final class ClusterAllocationExplainIT extends ESIntegTestCase {
             assertEquals(d.type(), Decision.Type.NO);
             if (noAttrNode.equals(nodeName)) {
                 assertThat(d.toString(), containsString("node does not match index include filters [foo:\"bar\"]"));
-                noAttrWeight = weight;
                 assertNull(storeStatus);
                 assertEquals("the shard cannot be assigned because one or more allocation decider returns a 'NO' decision",
                         explanation.getFinalExplanation());

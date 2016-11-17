@@ -20,7 +20,6 @@
 package org.elasticsearch.ingest.common;
 
 import org.elasticsearch.ElasticsearchParseException;
-import org.elasticsearch.ingest.AbstractProcessorFactory;
 import org.elasticsearch.test.ESTestCase;
 import org.hamcrest.Matchers;
 
@@ -28,6 +27,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 import static org.hamcrest.CoreMatchers.equalTo;
+import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.nullValue;
 
 public class ConvertProcessorFactoryTests extends ESTestCase {
@@ -39,12 +39,12 @@ public class ConvertProcessorFactoryTests extends ESTestCase {
         config.put("field", "field1");
         config.put("type", type.toString());
         String processorTag = randomAsciiOfLength(10);
-        config.put(AbstractProcessorFactory.TAG_KEY, processorTag);
-        ConvertProcessor convertProcessor = factory.create(config);
+        ConvertProcessor convertProcessor = factory.create(null, processorTag, config);
         assertThat(convertProcessor.getTag(), equalTo(processorTag));
         assertThat(convertProcessor.getField(), equalTo("field1"));
         assertThat(convertProcessor.getTargetField(), equalTo("field1"));
         assertThat(convertProcessor.getConvertType(), equalTo(type));
+        assertThat(convertProcessor.isIgnoreMissing(), is(false));
     }
 
     public void testCreateUnsupportedType() throws Exception {
@@ -54,7 +54,7 @@ public class ConvertProcessorFactoryTests extends ESTestCase {
         config.put("field", "field1");
         config.put("type", type);
         try {
-            factory.create(config);
+            factory.create(null, null, config);
             fail("factory create should have failed");
         } catch (ElasticsearchParseException e) {
             assertThat(e.getMessage(), Matchers.equalTo("[type] type [" + type + "] not supported, cannot convert field."));
@@ -70,7 +70,7 @@ public class ConvertProcessorFactoryTests extends ESTestCase {
         String type = "type-" + randomAsciiOfLengthBetween(1, 10);
         config.put("type", type);
         try {
-            factory.create(config);
+            factory.create(null, null, config);
             fail("factory create should have failed");
         } catch (ElasticsearchParseException e) {
             assertThat(e.getMessage(), Matchers.equalTo("[field] required property is missing"));
@@ -82,7 +82,7 @@ public class ConvertProcessorFactoryTests extends ESTestCase {
         Map<String, Object> config = new HashMap<>();
         config.put("field", "field1");
         try {
-            factory.create(config);
+            factory.create(null, null, config);
             fail("factory create should have failed");
         } catch (ElasticsearchParseException e) {
             assertThat(e.getMessage(), Matchers.equalTo("[type] required property is missing"));
@@ -97,11 +97,27 @@ public class ConvertProcessorFactoryTests extends ESTestCase {
         config.put("target_field", "field2");
         config.put("type", type.toString());
         String processorTag = randomAsciiOfLength(10);
-        config.put(AbstractProcessorFactory.TAG_KEY, processorTag);
-        ConvertProcessor convertProcessor = factory.create(config);
+        ConvertProcessor convertProcessor = factory.create(null, processorTag, config);
         assertThat(convertProcessor.getTag(), equalTo(processorTag));
         assertThat(convertProcessor.getField(), equalTo("field1"));
         assertThat(convertProcessor.getTargetField(), equalTo("field2"));
         assertThat(convertProcessor.getConvertType(), equalTo(type));
+        assertThat(convertProcessor.isIgnoreMissing(), is(false));
+    }
+
+    public void testCreateWithIgnoreMissing() throws Exception {
+        ConvertProcessor.Factory factory = new ConvertProcessor.Factory();
+        Map<String, Object> config = new HashMap<>();
+        ConvertProcessor.Type type = randomFrom(ConvertProcessor.Type.values());
+        config.put("field", "field1");
+        config.put("type", type.toString());
+        config.put("ignore_missing", true);
+        String processorTag = randomAsciiOfLength(10);
+        ConvertProcessor convertProcessor = factory.create(null, processorTag, config);
+        assertThat(convertProcessor.getTag(), equalTo(processorTag));
+        assertThat(convertProcessor.getField(), equalTo("field1"));
+        assertThat(convertProcessor.getTargetField(), equalTo("field1"));
+        assertThat(convertProcessor.getConvertType(), equalTo(type));
+        assertThat(convertProcessor.isIgnoreMissing(), is(true));
     }
 }

@@ -26,7 +26,7 @@ import org.elasticsearch.common.lucene.search.function.CombineFunction;
 import org.elasticsearch.index.query.QueryBuilders;
 import org.elasticsearch.plugins.Plugin;
 import org.elasticsearch.script.Script;
-import org.elasticsearch.script.ScriptService.ScriptType;
+import org.elasticsearch.script.ScriptType;
 import org.elasticsearch.search.builder.SearchSourceBuilder;
 import org.elasticsearch.search.sort.ScriptSortBuilder.ScriptSortType;
 import org.elasticsearch.search.sort.SortBuilders;
@@ -68,7 +68,7 @@ public class GroovyScriptTests extends ESIntegTestCase {
     }
 
     public void assertScript(String scriptString) {
-        Script script = new Script(scriptString, ScriptType.INLINE, "groovy", null);
+        Script script = new Script(ScriptType.INLINE, GroovyScriptEngineService.NAME, scriptString, Collections.emptyMap());
         SearchResponse resp = client().prepareSearch("test")
                 .setSource(new SearchSourceBuilder().query(QueryBuilders.matchAllQuery()).sort(SortBuilders.
                         scriptSort(script, ScriptSortType.NUMBER)))
@@ -85,8 +85,8 @@ public class GroovyScriptTests extends ESIntegTestCase {
         try {
             client().prepareSearch("test")
                     .setQuery(
-                            constantScoreQuery(scriptQuery(new Script("1 == not_found", ScriptType.INLINE, GroovyScriptEngineService.NAME,
-                                    null)))).get();
+                            constantScoreQuery(scriptQuery(new Script(ScriptType.INLINE, GroovyScriptEngineService.NAME, "1 == not_found",
+                                Collections.emptyMap())))).get();
             fail("should have thrown an exception");
         } catch (SearchPhaseExecutionException e) {
             assertThat(e.toString()+ "should not contained NotSerializableTransportException",
@@ -99,15 +99,16 @@ public class GroovyScriptTests extends ESIntegTestCase {
 
         try {
             client().prepareSearch("test")
-                    .setQuery(constantScoreQuery(scriptQuery(new Script("assert false", ScriptType.INLINE, "groovy", null)))).get();
+                    .setQuery(constantScoreQuery(scriptQuery(
+                            new Script(ScriptType.INLINE, GroovyScriptEngineService.NAME, "null.foo", Collections.emptyMap())))).get();
             fail("should have thrown an exception");
         } catch (SearchPhaseExecutionException e) {
             assertThat(e.toString() + "should not contained NotSerializableTransportException",
                     e.toString().contains("NotSerializableTransportException"), equalTo(false));
             assertThat(e.toString() + "should have contained ScriptException",
                     e.toString().contains("ScriptException"), equalTo(true));
-            assertThat(e.toString()+ "should have contained an assert error",
-                    e.toString().contains("AssertionError[assert false"), equalTo(true));
+            assertThat(e.toString()+ "should have contained a NullPointerException",
+                    e.toString().contains("NullPointerException[Cannot get property 'foo' on null object]"), equalTo(true));
         }
     }
 
@@ -118,8 +119,9 @@ public class GroovyScriptTests extends ESIntegTestCase {
         refresh();
 
         // doc[] access
-        SearchResponse resp = client().prepareSearch("test").setQuery(functionScoreQuery(scriptFunction(new Script("doc['bar'].value", ScriptType.INLINE, "groovy", null)))
-            .boostMode(CombineFunction.REPLACE)).get();
+        SearchResponse resp = client().prepareSearch("test").setQuery(functionScoreQuery(scriptFunction(
+                new Script(ScriptType.INLINE, GroovyScriptEngineService.NAME, "doc['bar'].value", Collections.emptyMap())))
+                        .boostMode(CombineFunction.REPLACE)).get();
 
         assertNoFailures(resp);
         assertOrderedSearchHits(resp, "3", "2", "1");
@@ -133,7 +135,7 @@ public class GroovyScriptTests extends ESIntegTestCase {
 
         // _score can be accessed
         SearchResponse resp = client().prepareSearch("test").setQuery(functionScoreQuery(matchQuery("foo", "dog"),
-                scriptFunction(new Script("_score", ScriptType.INLINE, "groovy", null)))
+                scriptFunction(new Script(ScriptType.INLINE, GroovyScriptEngineService.NAME, "_score", Collections.emptyMap())))
             .boostMode(CombineFunction.REPLACE)).get();
         assertNoFailures(resp);
         assertSearchHits(resp, "3", "1");
@@ -144,9 +146,10 @@ public class GroovyScriptTests extends ESIntegTestCase {
         resp = client()
                 .prepareSearch("test")
                 .setQuery(
-                        functionScoreQuery(matchQuery("foo", "dog"),
-                                scriptFunction(new Script("_score > 0.0 ? _score : 0", ScriptType.INLINE, "groovy", null))).boostMode(
-                                CombineFunction.REPLACE)).get();
+                        functionScoreQuery(matchQuery("foo", "dog"), scriptFunction(
+                                new Script(ScriptType.INLINE,
+                                    GroovyScriptEngineService.NAME, "_score > 0.0 ? _score : 0", Collections.emptyMap())))
+                                        .boostMode(CombineFunction.REPLACE)).get();
         assertNoFailures(resp);
         assertSearchHits(resp, "3", "1");
     }

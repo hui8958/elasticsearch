@@ -56,12 +56,10 @@ import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.sameInstance;
 
-/**
- */
 @ESIntegTestCase.SuiteScopeTestCase
 public class ChildrenIT extends ESIntegTestCase {
 
-    private final static Map<String, Control> categoryToControl = new HashMap<>();
+    private static final Map<String, Control> categoryToControl = new HashMap<>();
 
     @Override
     public void setupSuiteScopeCluster() throws Exception {

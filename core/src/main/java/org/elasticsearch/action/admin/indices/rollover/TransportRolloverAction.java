@@ -25,11 +25,12 @@ import org.elasticsearch.action.admin.indices.create.CreateIndexClusterStateUpda
 import org.elasticsearch.action.admin.indices.create.CreateIndexRequest;
 import org.elasticsearch.action.admin.indices.stats.IndicesStatsResponse;
 import org.elasticsearch.action.support.ActionFilters;
+import org.elasticsearch.action.support.ActiveShardCount;
+import org.elasticsearch.action.support.ActiveShardsObserver;
 import org.elasticsearch.action.support.IndicesOptions;
 import org.elasticsearch.action.support.master.TransportMasterNodeAction;
 import org.elasticsearch.client.Client;
 import org.elasticsearch.cluster.ClusterState;
-import org.elasticsearch.cluster.ack.ClusterStateUpdateResponse;
 import org.elasticsearch.cluster.block.ClusterBlockException;
 import org.elasticsearch.cluster.block.ClusterBlockLevel;
 import org.elasticsearch.cluster.metadata.AliasAction;
@@ -43,22 +44,27 @@ import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.index.shard.DocsStats;
-import org.elasticsearch.indices.IndexAlreadyExistsException;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.TransportService;
 
+import java.util.Arrays;
+import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+
+import static java.util.Collections.unmodifiableList;
 
 /**
  * Main class to swap the index pointed to by an alias, given some conditions
  */
 public class TransportRolloverAction extends TransportMasterNodeAction<RolloverRequest, RolloverResponse> {
 
-    private static final Pattern INDEX_NAME_PATTERN = Pattern.compile("^.*-(\\d)+$");
+    private static final Pattern INDEX_NAME_PATTERN = Pattern.compile("^.*-\\d+$");
     private final MetaDataCreateIndexService createIndexService;
     private final MetaDataIndexAliasesService indexAliasesService;
+    private final ActiveShardsObserver activeShardsObserver;
     private final Client client;
 
     @Inject
@@ -71,6 +77,7 @@ public class TransportRolloverAction extends TransportMasterNodeAction<RolloverR
         this.createIndexService = createIndexService;
         this.indexAliasesService = indexAliasesService;
         this.client = client;
+        this.activeShardsObserver = new ActiveShardsObserver(settings, clusterService, threadPool);
     }
 
     @Override
@@ -99,60 +106,58 @@ public class TransportRolloverAction extends TransportMasterNodeAction<RolloverR
         validate(metaData, rolloverRequest);
         final AliasOrIndex aliasOrIndex = metaData.getAliasAndIndexLookup().get(rolloverRequest.getAlias());
         final IndexMetaData indexMetaData = aliasOrIndex.getIndices().get(0);
+        final String sourceProvidedName = indexMetaData.getSettings().get(IndexMetaData.SETTING_INDEX_PROVIDED_NAME,
+            indexMetaData.getIndex().getName());
         final String sourceIndexName = indexMetaData.getIndex().getName();
+        final String unresolvedName = (rolloverRequest.getNewIndexName() != null)
+            ? rolloverRequest.getNewIndexName()
+            : generateRolloverIndexName(sourceProvidedName, indexNameExpressionResolver);
+        final String rolloverIndexName = indexNameExpressionResolver.resolveDateMathExpression(unresolvedName);
+        MetaDataCreateIndexService.validateIndexName(rolloverIndexName, state); // will fail if the index already exists
         client.admin().indices().prepareStats(sourceIndexName).clear().setDocs(true).execute(
             new ActionListener<IndicesStatsResponse>() {
                 @Override
                 public void onResponse(IndicesStatsResponse statsResponse) {
                     final Set<Condition.Result> conditionResults = evaluateConditions(rolloverRequest.getConditions(),
                         statsResponse.getTotal().getDocs(), metaData.index(sourceIndexName));
-                    final String rolloverIndexName = (rolloverRequest.getNewIndexName() != null)
-                        ? rolloverRequest.getNewIndexName()
-                        : generateRolloverIndexName(sourceIndexName);
+
                     if (rolloverRequest.isDryRun()) {
                         listener.onResponse(
-                            new RolloverResponse(sourceIndexName, rolloverIndexName, conditionResults, true, false));
+                            new RolloverResponse(sourceIndexName, rolloverIndexName, conditionResults, true, false, false, false));
                         return;
                     }
                     if (conditionResults.size() == 0 || conditionResults.stream().anyMatch(result -> result.matched)) {
-                        createIndexService.createIndex(prepareCreateIndexRequest(rolloverIndexName, rolloverRequest),
-                            new ActionListener<ClusterStateUpdateResponse>() {
-                                @Override
-                                public void onResponse(ClusterStateUpdateResponse response) {
-                                    // switch the alias to point to the newly created index
-                                    indexAliasesService.indicesAliases(
-                                        prepareRolloverAliasesUpdateRequest(sourceIndexName, rolloverIndexName,
-                                            rolloverRequest),
-                                        new ActionListener<ClusterStateUpdateResponse>() {
-                                            @Override
-                                            public void onResponse(ClusterStateUpdateResponse clusterStateUpdateResponse) {
-                                                listener.onResponse(
-                                                    new RolloverResponse(sourceIndexName, rolloverIndexName,
-                                                        conditionResults, false, true));
-                                            }
-
-                                            @Override
-                                            public void onFailure(Throwable e) {
-                                                listener.onFailure(e);
-                                            }
-                                        });
-                                }
-
-                                @Override
-                                public void onFailure(Throwable t) {
-                                    listener.onFailure(t);
-                                }
-                            });
+                        CreateIndexClusterStateUpdateRequest updateRequest = prepareCreateIndexRequest(unresolvedName, rolloverIndexName,
+                            rolloverRequest);
+                        createIndexService.createIndex(updateRequest, ActionListener.wrap(createIndexClusterStateUpdateResponse -> {
+                            // switch the alias to point to the newly created index
+                            indexAliasesService.indicesAliases(
+                                prepareRolloverAliasesUpdateRequest(sourceIndexName, rolloverIndexName,
+                                    rolloverRequest),
+                                ActionListener.wrap(aliasClusterStateUpdateResponse -> {
+                                    if (aliasClusterStateUpdateResponse.isAcknowledged()) {
+                                        activeShardsObserver.waitForActiveShards(rolloverIndexName,
+                                            rolloverRequest.getCreateIndexRequest().waitForActiveShards(),
+                                            rolloverRequest.masterNodeTimeout(),
+                                            isShardsAcked -> listener.onResponse(new RolloverResponse(sourceIndexName, rolloverIndexName,
+                                                                                    conditionResults, false, true, true, isShardsAcked)),
+                                            listener::onFailure);
+                                    } else {
+                                        listener.onResponse(new RolloverResponse(sourceIndexName, rolloverIndexName, conditionResults,
+                                                                                    false, true, false, false));
+                                    }
+                                }, listener::onFailure));
+                        }, listener::onFailure));
                     } else {
                         // conditions not met
                         listener.onResponse(
-                            new RolloverResponse(sourceIndexName, sourceIndexName, conditionResults, false, false)
+                            new RolloverResponse(sourceIndexName, rolloverIndexName, conditionResults, false, false, false, false)
                         );
                     }
                 }
 
                 @Override
-                public void onFailure(Throwable e) {
+                public void onFailure(Exception e) {
                     listener.onFailure(e);
                 }
             }
@@ -161,25 +166,29 @@ public class TransportRolloverAction extends TransportMasterNodeAction<RolloverR
 
     static IndicesAliasesClusterStateUpdateRequest prepareRolloverAliasesUpdateRequest(String oldIndex, String newIndex,
                                                                                        RolloverRequest request) {
-        final IndicesAliasesClusterStateUpdateRequest updateRequest = new IndicesAliasesClusterStateUpdateRequest()
+        List<AliasAction> actions = unmodifiableList(Arrays.asList(
+                new AliasAction.Add(newIndex, request.getAlias(), null, null, null),
+                new AliasAction.Remove(oldIndex, request.getAlias())));
+        final IndicesAliasesClusterStateUpdateRequest updateRequest = new IndicesAliasesClusterStateUpdateRequest(actions)
             .ackTimeout(request.ackTimeout())
             .masterNodeTimeout(request.masterNodeTimeout());
-        AliasAction[] actions = new AliasAction[2];
-        actions[0] = new AliasAction(AliasAction.Type.ADD, newIndex, request.getAlias());
-        actions[1] = new AliasAction(AliasAction.Type.REMOVE, oldIndex, request.getAlias());
-        updateRequest.actions(actions);
         return updateRequest;
     }
 
 
-    static String generateRolloverIndexName(String sourceIndexName) {
-        if (INDEX_NAME_PATTERN.matcher(sourceIndexName).matches()) {
+    static String generateRolloverIndexName(String sourceIndexName, IndexNameExpressionResolver indexNameExpressionResolver) {
+        String resolvedName = indexNameExpressionResolver.resolveDateMathExpression(sourceIndexName);
+        final boolean isDateMath = sourceIndexName.equals(resolvedName) == false;
+        if (INDEX_NAME_PATTERN.matcher(resolvedName).matches()) {
             int numberIndex = sourceIndexName.lastIndexOf("-");
             assert numberIndex != -1 : "no separator '-' found";
-            int counter = Integer.parseInt(sourceIndexName.substring(numberIndex + 1));
-            return String.join("-", sourceIndexName.substring(0, numberIndex), String.valueOf(++counter));
+            int counter = Integer.parseInt(sourceIndexName.substring(numberIndex + 1, isDateMath ? sourceIndexName.length()-1 :
+                sourceIndexName.length()));
+            String newName = sourceIndexName.substring(0, numberIndex) + "-" + String.format(Locale.ROOT, "%06d", ++counter)
+                + (isDateMath ? ">" : "");
+            return newName;
         } else {
-            throw new IllegalArgumentException("index name [" + sourceIndexName + "] does not match pattern '^.*-(\\d)+$'");
+            throw new IllegalArgumentException("index name [" + sourceIndexName + "] does not match pattern '^.*-\\d+$'");
         }
     }
 
@@ -205,18 +214,19 @@ public class TransportRolloverAction extends TransportMasterNodeAction<RolloverR
         }
     }
 
-    static CreateIndexClusterStateUpdateRequest prepareCreateIndexRequest(final String targetIndexName,
+    static CreateIndexClusterStateUpdateRequest prepareCreateIndexRequest(final String providedIndexName, final String targetIndexName,
                                                                           final RolloverRequest rolloverRequest) {
 
         final CreateIndexRequest createIndexRequest = rolloverRequest.getCreateIndexRequest();
         createIndexRequest.cause("rollover_index");
         createIndexRequest.index(targetIndexName);
         return new CreateIndexClusterStateUpdateRequest(createIndexRequest,
-            "rollover_index", targetIndexName, true)
+            "rollover_index", targetIndexName, providedIndexName, true)
             .ackTimeout(createIndexRequest.timeout())
             .masterNodeTimeout(createIndexRequest.masterNodeTimeout())
             .settings(createIndexRequest.settings())
             .aliases(createIndexRequest.aliases())
+            .waitForActiveShards(ActiveShardCount.NONE) // not waiting for shards here, will wait on the alias switch operation
             .mappings(createIndexRequest.mappings());
     }
 

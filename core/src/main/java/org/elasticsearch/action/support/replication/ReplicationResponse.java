@@ -24,7 +24,6 @@ import org.elasticsearch.ExceptionsHelper;
 import org.elasticsearch.action.ActionResponse;
 import org.elasticsearch.action.ShardOperationFailedException;
 import org.elasticsearch.common.Nullable;
-import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.io.stream.Streamable;
@@ -34,13 +33,14 @@ import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.rest.RestStatus;
 
 import java.io.IOException;
+import java.util.Arrays;
 
 /**
  * Base class for write action responses.
  */
 public class ReplicationResponse extends ActionResponse {
 
-    public final static ReplicationResponse.ShardInfo.Failure[] EMPTY = new ReplicationResponse.ShardInfo.Failure[0];
+    public static final ReplicationResponse.ShardInfo.Failure[] EMPTY = new ReplicationResponse.ShardInfo.Failure[0];
 
     private ShardInfo shardInfo;
 
@@ -162,7 +162,11 @@ public class ReplicationResponse extends ActionResponse {
 
         @Override
         public String toString() {
-            return Strings.toString(this);
+            return "ShardInfo{" +
+                "total=" + total +
+                ", successful=" + successful +
+                ", failures=" + Arrays.toString(failures) +
+                '}';
         }
 
         public static ShardInfo readShardInfo(StreamInput in) throws IOException {
@@ -175,11 +179,11 @@ public class ReplicationResponse extends ActionResponse {
 
             private ShardId shardId;
             private String nodeId;
-            private Throwable cause;
+            private Exception cause;
             private RestStatus status;
             private boolean primary;
 
-            public Failure(ShardId  shardId, @Nullable String nodeId, Throwable cause, RestStatus status, boolean primary) {
+            public Failure(ShardId  shardId, @Nullable String nodeId, Exception cause, RestStatus status, boolean primary) {
                 this.shardId = shardId;
                 this.nodeId = nodeId;
                 this.cause = cause;
@@ -251,7 +255,7 @@ public class ReplicationResponse extends ActionResponse {
             public void readFrom(StreamInput in) throws IOException {
                 shardId = ShardId.readShardId(in);
                 nodeId = in.readOptionalString();
-                cause = in.readThrowable();
+                cause = in.readException();
                 status = RestStatus.readFrom(in);
                 primary = in.readBoolean();
             }
@@ -260,7 +264,7 @@ public class ReplicationResponse extends ActionResponse {
             public void writeTo(StreamOutput out) throws IOException {
                 shardId.writeTo(out);
                 out.writeOptionalString(nodeId);
-                out.writeThrowable(cause);
+                out.writeException(cause);
                 RestStatus.writeTo(out, status);
                 out.writeBoolean(primary);
             }
@@ -298,7 +302,6 @@ public class ReplicationResponse extends ActionResponse {
             private static final String _SHARDS = "_shards";
             private static final String TOTAL = "total";
             private static final String SUCCESSFUL = "successful";
-            private static final String PENDING = "pending";
             private static final String FAILED = "failed";
             private static final String FAILURES = "failures";
 

@@ -19,11 +19,13 @@
 
 package org.elasticsearch.gateway;
 
+import org.apache.logging.log4j.Logger;
 import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.Version;
 import org.elasticsearch.action.admin.cluster.health.ClusterHealthResponse;
 import org.elasticsearch.action.admin.cluster.state.ClusterStateResponse;
 import org.elasticsearch.action.get.GetResponse;
+import org.elasticsearch.action.support.ActiveShardCount;
 import org.elasticsearch.client.Client;
 import org.elasticsearch.client.Requests;
 import org.elasticsearch.cluster.ClusterState;
@@ -32,12 +34,11 @@ import org.elasticsearch.cluster.metadata.MappingMetaData;
 import org.elasticsearch.cluster.metadata.MetaData;
 import org.elasticsearch.cluster.routing.ShardRoutingState;
 import org.elasticsearch.common.Priority;
-import org.elasticsearch.common.logging.ESLogger;
 import org.elasticsearch.common.logging.Loggers;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.common.xcontent.XContentFactory;
-import org.elasticsearch.discovery.zen.elect.ElectMasterService;
+import org.elasticsearch.discovery.zen.ElectMasterService;
 import org.elasticsearch.env.Environment;
 import org.elasticsearch.env.NodeEnvironment;
 import org.elasticsearch.index.mapper.MapperParsingException;
@@ -55,7 +56,6 @@ import java.util.List;
 
 import static org.elasticsearch.action.support.WriteRequest.RefreshPolicy.IMMEDIATE;
 import static org.elasticsearch.index.query.QueryBuilders.matchAllQuery;
-import static org.elasticsearch.index.query.QueryBuilders.matchQuery;
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertAcked;
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertHitCount;
 import static org.hamcrest.Matchers.equalTo;
@@ -64,7 +64,7 @@ import static org.hamcrest.Matchers.nullValue;
 @ClusterScope(scope = Scope.TEST, numDataNodes = 0)
 public class GatewayIndexStateIT extends ESIntegTestCase {
 
-    private final ESLogger logger = Loggers.getLogger(GatewayIndexStateIT.class);
+    private final Logger logger = Loggers.getLogger(GatewayIndexStateIT.class);
 
     public void testMappingMetaDataParsed() throws Exception {
         logger.info("--> starting 1 nodes");
@@ -75,9 +75,6 @@ public class GatewayIndexStateIT extends ESIntegTestCase {
                 .addMapping("type1", XContentFactory.jsonBuilder().startObject().startObject("type1").startObject("_routing")
                     .field("required", true).endObject().endObject().endObject())
                 .execute().actionGet();
-
-        logger.info("--> waiting for yellow status");
-        ensureYellow();
 
         logger.info("--> verify meta _routing required exists");
         MappingMetaData mappingMd = client().admin().cluster().prepareState().execute().actionGet().getState().metaData()
@@ -205,7 +202,7 @@ public class GatewayIndexStateIT extends ESIntegTestCase {
         internalCluster().startNode(Settings.builder().put(Node.NODE_DATA_SETTING.getKey(), false).build());
 
         logger.info("--> create an index");
-        client().admin().indices().prepareCreate("test").execute().actionGet();
+        client().admin().indices().prepareCreate("test").setWaitForActiveShards(ActiveShardCount.NONE).execute().actionGet();
 
         logger.info("--> closing master node");
         internalCluster().closeNonSharedNodes(false);
@@ -232,9 +229,6 @@ public class GatewayIndexStateIT extends ESIntegTestCase {
 
         logger.info("--> create an index");
         client().admin().indices().prepareCreate("test").execute().actionGet();
-
-        logger.info("--> waiting for test index to be created");
-        ensureYellow();
 
         client().prepareIndex("test", "type1").setSource("field1", "value1").setTimeout("100ms").execute().actionGet();
     }
@@ -346,7 +340,7 @@ public class GatewayIndexStateIT extends ESIntegTestCase {
             logger.info("--> created temp data path for shadow replicas [{}]", dataPath);
             logger.info("--> starting a cluster with " + numNodes + " nodes");
             final Settings nodeSettings = Settings.builder()
-                                                  .put("node.add_id_to_custom_path", false)
+                                                  .put("node.add_lock_id_to_custom_path", false)
                                                   .put(Environment.PATH_SHARED_DATA_SETTING.getKey(), dataPath.toString())
                                                   .put("index.store.fs.fs_lock", randomFrom("native", "simple"))
                                                   .build();
@@ -414,7 +408,7 @@ public class GatewayIndexStateIT extends ESIntegTestCase {
                 .health(Requests.clusterHealthRequest()
                     .waitForGreenStatus()
                     .waitForEvents(Priority.LANGUID)
-                    .waitForRelocatingShards(0).waitForNodes("2")).actionGet();
+                    .waitForNoRelocatingShards(true).waitForNodes("2")).actionGet();
         }
         ClusterState state = client().admin().cluster().prepareState().get().getState();
         IndexMetaData metaData = state.getMetaData().index("test");
@@ -426,7 +420,7 @@ public class GatewayIndexStateIT extends ESIntegTestCase {
                  // this one is not validated ahead of time and breaks allocation
                 .put("index.analysis.filter.myCollator.type", "icu_collation")
             ).build();
-            IndexMetaData.FORMAT.write(brokenMeta, brokenMeta.getVersion(), services.indexPaths(brokenMeta.getIndex()));
+            IndexMetaData.FORMAT.write(brokenMeta, services.indexPaths(brokenMeta.getIndex()));
         }
         internalCluster().fullRestart();
         // ensureGreen(closedIndex) waits for the index to show up in the metadata
@@ -476,14 +470,14 @@ public class GatewayIndexStateIT extends ESIntegTestCase {
                 .health(Requests.clusterHealthRequest()
                     .waitForGreenStatus()
                     .waitForEvents(Priority.LANGUID)
-                    .waitForRelocatingShards(0).waitForNodes("2")).actionGet();
+                    .waitForNoRelocatingShards(true).waitForNodes("2")).actionGet();
         }
         ClusterState state = client().admin().cluster().prepareState().get().getState();
         IndexMetaData metaData = state.getMetaData().index("test");
         for (NodeEnvironment services : internalCluster().getInstances(NodeEnvironment.class)) {
             IndexMetaData brokenMeta = IndexMetaData.builder(metaData).settings(metaData.getSettings()
                 .filter((s) -> "index.analysis.analyzer.test.tokenizer".equals(s) == false)).build();
-            IndexMetaData.FORMAT.write(brokenMeta, brokenMeta.getVersion(), services.indexPaths(brokenMeta.getIndex()));
+            IndexMetaData.FORMAT.write(brokenMeta, services.indexPaths(brokenMeta.getIndex()));
         }
         internalCluster().fullRestart();
         // ensureGreen(closedIndex) waits for the index to show up in the metadata
@@ -513,7 +507,7 @@ public class GatewayIndexStateIT extends ESIntegTestCase {
                 .health(Requests.clusterHealthRequest()
                     .waitForGreenStatus()
                     .waitForEvents(Priority.LANGUID)
-                    .waitForRelocatingShards(0).waitForNodes("2")).actionGet();
+                    .waitForNoRelocatingShards(true).waitForNodes("2")).actionGet();
         }
         ClusterState state = client().admin().cluster().prepareState().get().getState();
         MetaData metaData = state.getMetaData();
@@ -521,7 +515,7 @@ public class GatewayIndexStateIT extends ESIntegTestCase {
             MetaData brokenMeta = MetaData.builder(metaData).persistentSettings(Settings.builder()
                 .put(metaData.persistentSettings()).put("this.is.unknown", true)
                 .put(ElectMasterService.DISCOVERY_ZEN_MINIMUM_MASTER_NODES_SETTING.getKey(), "broken").build()).build();
-            MetaData.FORMAT.write(brokenMeta, metaData.version(), nodeEnv.nodeDataPaths());
+            MetaData.FORMAT.write(brokenMeta, nodeEnv.nodeDataPaths());
         }
         internalCluster().fullRestart();
         ensureYellow("test"); // wait for state recovery

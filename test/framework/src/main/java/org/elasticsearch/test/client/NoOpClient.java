@@ -39,7 +39,7 @@ public class NoOpClient extends AbstractClient {
     }
 
     @Override
-    protected <Request extends ActionRequest<Request>,
+    protected <Request extends ActionRequest,
                     Response extends ActionResponse,
                     RequestBuilder extends ActionRequestBuilder<Request, Response, RequestBuilder>>
             void doExecute(Action<Request, Response, RequestBuilder> action, Request request, ActionListener<Response> listener) {
@@ -50,8 +50,8 @@ public class NoOpClient extends AbstractClient {
     public void close() {
         try {
             ThreadPool.terminate(threadPool(), 10, TimeUnit.SECONDS);
-        } catch (Throwable t) {
-            throw new ElasticsearchException(t.getMessage(), t);
+        } catch (Exception e) {
+            throw new ElasticsearchException(e.getMessage(), e);
         }
     }
 }

@@ -25,11 +25,13 @@ import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.index.query.QueryBuilder;
 import org.elasticsearch.search.aggregations.AggregatorFactories.Builder;
 import org.elasticsearch.search.aggregations.AggregatorFactory;
+import org.elasticsearch.search.aggregations.InternalAggregation;
+import org.elasticsearch.search.aggregations.InternalAggregation.Type;
 import org.elasticsearch.search.aggregations.bucket.significant.heuristics.JLHScore;
 import org.elasticsearch.search.aggregations.bucket.significant.heuristics.SignificanceHeuristic;
+import org.elasticsearch.search.aggregations.bucket.terms.TermsAggregationBuilder;
 import org.elasticsearch.search.aggregations.bucket.terms.TermsAggregator;
 import org.elasticsearch.search.aggregations.bucket.terms.TermsAggregator.BucketCountThresholds;
-import org.elasticsearch.search.aggregations.bucket.terms.TermsAggregationBuilder;
 import org.elasticsearch.search.aggregations.bucket.terms.support.IncludeExclude;
 import org.elasticsearch.search.aggregations.support.AggregationContext;
 import org.elasticsearch.search.aggregations.support.ValueType;
@@ -42,12 +44,9 @@ import org.elasticsearch.search.aggregations.support.ValuesSourceType;
 import java.io.IOException;
 import java.util.Objects;
 
-/**
- *
- */
 public class SignificantTermsAggregationBuilder extends ValuesSourceAggregationBuilder<ValuesSource, SignificantTermsAggregationBuilder> {
-    public static final String NAME = SignificantStringTerms.TYPE.name();
-    public static final ParseField AGGREGATION_NAME_FIELD = new ParseField(NAME);
+    public static final String NAME = "significant_terms";
+    public static final InternalAggregation.Type TYPE = new Type(NAME);
 
     static final ParseField BACKGROUND_FILTER = new ParseField("background_filter");
     static final ParseField HEURISTIC = new ParseField("significance_heuristic");
@@ -63,14 +62,14 @@ public class SignificantTermsAggregationBuilder extends ValuesSourceAggregationB
     private SignificanceHeuristic significanceHeuristic = DEFAULT_SIGNIFICANCE_HEURISTIC;
 
     public SignificantTermsAggregationBuilder(String name, ValueType valueType) {
-        super(name, SignificantStringTerms.TYPE, ValuesSourceType.ANY, valueType);
+        super(name, TYPE, ValuesSourceType.ANY, valueType);
     }
 
     /**
      * Read from a Stream.
      */
     public SignificantTermsAggregationBuilder(StreamInput in) throws IOException {
-        super(in, SignificantStringTerms.TYPE, ValuesSourceType.ANY);
+        super(in, TYPE, ValuesSourceType.ANY);
         bucketCountThresholds = new BucketCountThresholds(in);
         executionHint = in.readOptionalString();
         filterBuilder = in.readOptionalNamedWriteable(QueryBuilder.class);
@@ -218,8 +217,9 @@ public class SignificantTermsAggregationBuilder extends ValuesSourceAggregationB
     @Override
     protected ValuesSourceAggregatorFactory<ValuesSource, ?> innerBuild(AggregationContext context, ValuesSourceConfig<ValuesSource> config,
             AggregatorFactory<?> parent, Builder subFactoriesBuilder) throws IOException {
+        SignificanceHeuristic executionHeuristic = this.significanceHeuristic.rewrite(context.searchContext());
         return new SignificantTermsAggregatorFactory(name, type, config, includeExclude, executionHint, filterBuilder,
-                bucketCountThresholds, significanceHeuristic, context, parent, subFactoriesBuilder, metaData);
+                bucketCountThresholds, executionHeuristic, context, parent, subFactoriesBuilder, metaData);
     }
 
     @Override

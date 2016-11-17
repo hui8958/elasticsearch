@@ -20,6 +20,9 @@
 package org.elasticsearch.gateway;
 
 import com.carrotsearch.hppc.cursors.ObjectCursor;
+
+import org.apache.logging.log4j.message.ParameterizedMessage;
+import org.apache.logging.log4j.util.Supplier;
 import org.elasticsearch.cluster.ClusterChangedEvent;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.ClusterStateListener;
@@ -32,7 +35,6 @@ import org.elasticsearch.cluster.metadata.MetaData;
 import org.elasticsearch.cluster.node.DiscoveryNodes;
 import org.elasticsearch.cluster.routing.RoutingTable;
 import org.elasticsearch.cluster.routing.allocation.AllocationService;
-import org.elasticsearch.cluster.routing.allocation.RoutingAllocation;
 import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.component.AbstractLifecycleComponent;
 import org.elasticsearch.common.inject.Inject;
@@ -42,18 +44,13 @@ import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.common.util.concurrent.AbstractRunnable;
 import org.elasticsearch.discovery.Discovery;
-import org.elasticsearch.env.NodeEnvironment;
-import org.elasticsearch.index.NodeServicesProvider;
 import org.elasticsearch.indices.IndicesService;
 import org.elasticsearch.rest.RestStatus;
 import org.elasticsearch.threadpool.ThreadPool;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/**
- *
- */
-public class GatewayService extends AbstractLifecycleComponent<GatewayService> implements ClusterStateListener {
+public class GatewayService extends AbstractLifecycleComponent implements ClusterStateListener {
 
     public static final Setting<Integer> EXPECTED_NODES_SETTING =
         Setting.intSetting("gateway.expected_nodes", -1, -1, Property.NodeScope);
@@ -96,12 +93,12 @@ public class GatewayService extends AbstractLifecycleComponent<GatewayService> i
 
     @Inject
     public GatewayService(Settings settings, AllocationService allocationService, ClusterService clusterService,
-                          ThreadPool threadPool, NodeEnvironment nodeEnvironment, GatewayMetaState metaState,
+                          ThreadPool threadPool, GatewayMetaState metaState,
                           TransportNodesListGatewayMetaState listGatewayMetaState, Discovery discovery,
-                          NodeServicesProvider nodeServicesProvider, IndicesService indicesService) {
+                          IndicesService indicesService) {
         super(settings);
-        this.gateway = new Gateway(settings, clusterService, nodeEnvironment, metaState, listGatewayMetaState, discovery,
-            nodeServicesProvider, indicesService);
+        this.gateway = new Gateway(settings, clusterService, metaState, listGatewayMetaState, discovery,
+            indicesService);
         this.allocationService = allocationService;
         this.clusterService = clusterService;
         this.threadPool = threadPool;
@@ -217,11 +214,11 @@ public class GatewayService extends AbstractLifecycleComponent<GatewayService> i
             if (recovered.compareAndSet(false, true)) {
                 threadPool.generic().execute(new AbstractRunnable() {
                     @Override
-                    public void onFailure(Throwable t) {
-                        logger.warn("Recovery failed", t);
+                    public void onFailure(Exception e) {
+                        logger.warn("Recovery failed", e);
                         // we reset `recovered` in the listener don't reset it here otherwise there might be a race
                         // that resets it to false while a new recover is already running?
-                        recoveryListener.onFailure("state recovery failed: " + t.getMessage());
+                        recoveryListener.onFailure("state recovery failed: " + e.getMessage());
                     }
 
                     @Override
@@ -281,16 +278,13 @@ public class GatewayService extends AbstractLifecycleComponent<GatewayService> i
                     routingTableBuilder.version(0);
 
                     // now, reroute
-                    RoutingAllocation.Result routingResult = allocationService.reroute(
-                            ClusterState.builder(updatedState).routingTable(routingTableBuilder.build()).build(),
-                            "state recovered");
-
-                    return ClusterState.builder(updatedState).routingResult(routingResult).build();
+                    updatedState = ClusterState.builder(updatedState).routingTable(routingTableBuilder.build()).build();
+                    return allocationService.reroute(updatedState, "state recovered");
                 }
 
                 @Override
-                public void onFailure(String source, Throwable t) {
-                    logger.error("unexpected failure during [{}]", t, source);
+                public void onFailure(String source, Exception e) {
+                    logger.error((Supplier<?>) () -> new ParameterizedMessage("unexpected failure during [{}]", source), e);
                     GatewayRecoveryListener.this.onFailure("failed to updated cluster state");
                 }
 

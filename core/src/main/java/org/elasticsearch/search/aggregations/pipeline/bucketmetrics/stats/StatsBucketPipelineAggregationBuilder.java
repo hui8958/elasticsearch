@@ -19,7 +19,6 @@
 
 package org.elasticsearch.search.aggregations.pipeline.bucketmetrics.stats;
 
-import org.elasticsearch.common.ParseField;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.xcontent.XContentBuilder;
@@ -35,11 +34,10 @@ import java.util.List;
 import java.util.Map;
 
 public class StatsBucketPipelineAggregationBuilder extends BucketMetricsPipelineAggregationBuilder<StatsBucketPipelineAggregationBuilder> {
-    public static final String NAME = StatsBucketPipelineAggregator.TYPE.name();
-    public static final ParseField AGGREGATION_NAME_FIELD = new ParseField(NAME);
+    public static final String NAME = "stats_bucket";
 
     public StatsBucketPipelineAggregationBuilder(String name, String bucketsPath) {
-        super(name, StatsBucketPipelineAggregator.TYPE.name(), new String[] { bucketsPath });
+        super(name, NAME, new String[] { bucketsPath });
     }
 
     /**
@@ -47,7 +45,7 @@ public class StatsBucketPipelineAggregationBuilder extends BucketMetricsPipeline
      */
     public StatsBucketPipelineAggregationBuilder(StreamInput in)
             throws IOException {
-        super(in, StatsBucketPipelineAggregator.TYPE.name());
+        super(in, NAME);
     }
 
     @Override

@@ -34,10 +34,10 @@ import org.elasticsearch.common.joda.Joda;
 import org.elasticsearch.common.lucene.BytesRefs;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentParser;
+import org.elasticsearch.index.mapper.DateFieldMapper;
+import org.elasticsearch.index.mapper.LegacyDateFieldMapper;
 import org.elasticsearch.index.mapper.MappedFieldType;
 import org.elasticsearch.index.mapper.MapperService;
-import org.elasticsearch.index.mapper.core.DateFieldMapper;
-import org.elasticsearch.index.mapper.core.LegacyDateFieldMapper;
 import org.joda.time.DateTimeZone;
 
 import java.io.IOException;
@@ -49,7 +49,6 @@ import java.util.Optional;
  */
 public class RangeQueryBuilder extends AbstractQueryBuilder<RangeQueryBuilder> implements MultiTermQueryBuilder {
     public static final String NAME = "range";
-    public static final ParseField QUERY_NAME_FIELD = new ParseField(NAME);
 
     public static final boolean DEFAULT_INCLUDE_UPPER = true;
     public static final boolean DEFAULT_INCLUDE_LOWER = true;
@@ -261,6 +260,10 @@ public class RangeQueryBuilder extends AbstractQueryBuilder<RangeQueryBuilder> i
         return this.timeZone == null ? null : this.timeZone.getID();
     }
 
+    DateTimeZone getDateTimeZone() { // for testing
+        return timeZone;
+    }
+
     /**
      * In case of format field, we can parse the from/to fields using this time format
      */
@@ -277,6 +280,13 @@ public class RangeQueryBuilder extends AbstractQueryBuilder<RangeQueryBuilder> i
      */
     public String format() {
         return this.format == null ? null : this.format.format();
+    }
+
+    DateMathParser getForceDateParser() { // pkg private for testing
+        if (this.format  != null) {
+            return new DateMathParser(this.format);
+        }
+        return null;
     }
 
     @Override
@@ -319,6 +329,7 @@ public class RangeQueryBuilder extends AbstractQueryBuilder<RangeQueryBuilder> i
             } else if (parseContext.isDeprecatedSetting(currentFieldName)) {
                 // skip
             } else if (token == XContentParser.Token.START_OBJECT) {
+                throwParsingExceptionOnMultipleFields(NAME, parser.getTokenLocation(), fieldName, currentFieldName);
                 fieldName = currentFieldName;
                 while ((token = parser.nextToken()) != XContentParser.Token.END_OBJECT) {
                     if (token == XContentParser.Token.FIELD_NAME) {
@@ -406,7 +417,7 @@ public class RangeQueryBuilder extends AbstractQueryBuilder<RangeQueryBuilder> i
         } else {
             DateMathParser dateMathParser = format == null ? null : new DateMathParser(format);
             return fieldType.isFieldWithinQuery(queryRewriteContext.getIndexReader(), from, to, includeLower,
-                    includeUpper, timeZone, dateMathParser);
+                    includeUpper, timeZone, dateMathParser, queryRewriteContext);
         }
     }
 
@@ -440,26 +451,20 @@ public class RangeQueryBuilder extends AbstractQueryBuilder<RangeQueryBuilder> i
         MappedFieldType mapper = context.fieldMapper(this.fieldName);
         if (mapper != null) {
             if (mapper instanceof LegacyDateFieldMapper.DateFieldType) {
-                DateMathParser forcedDateParser = null;
-                if (this.format  != null) {
-                    forcedDateParser = new DateMathParser(this.format);
-                }
+
                 query = ((LegacyDateFieldMapper.DateFieldType) mapper).rangeQuery(from, to, includeLower, includeUpper,
-                        timeZone, forcedDateParser);
+                        timeZone, getForceDateParser(), context);
             } else if (mapper instanceof DateFieldMapper.DateFieldType) {
-                DateMathParser forcedDateParser = null;
-                if (this.format  != null) {
-                    forcedDateParser = new DateMathParser(this.format);
-                }
+
                 query = ((DateFieldMapper.DateFieldType) mapper).rangeQuery(from, to, includeLower, includeUpper,
-                        timeZone, forcedDateParser);
+                        timeZone, getForceDateParser(), context);
             } else  {
                 if (timeZone != null) {
                     throw new QueryShardException(context, "[range] time_zone can not be applied to non date field ["
                             + fieldName + "]");
                 }
                 //LUCENE 4 UPGRADE Mapper#rangeQuery should use bytesref as well?
-                query = mapper.rangeQuery(from, to, includeLower, includeUpper);
+                query = mapper.rangeQuery(from, to, includeLower, includeUpper, context);
             }
         } else {
             if (timeZone != null) {

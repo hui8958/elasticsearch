@@ -19,7 +19,7 @@
 
 package org.elasticsearch.client;
 
-import com.carrotsearch.randomizedtesting.generators.RandomInts;
+import com.carrotsearch.randomizedtesting.generators.RandomNumbers;
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpEntityEnclosingRequest;
 import org.apache.http.HttpHost;
@@ -35,6 +35,8 @@ import org.apache.http.entity.InputStreamEntity;
 import org.apache.http.entity.StringEntity;
 import org.apache.http.message.BasicHttpResponse;
 import org.apache.http.message.BasicStatusLine;
+import org.apache.http.nio.entity.NByteArrayEntity;
+import org.apache.http.nio.entity.NStringEntity;
 import org.apache.http.util.EntityUtils;
 
 import java.io.ByteArrayInputStream;
@@ -50,10 +52,17 @@ public class RequestLoggerTests extends RestClientTestCase {
 
     public void testTraceRequest() throws IOException, URISyntaxException {
         HttpHost host = new HttpHost("localhost", 9200, getRandom().nextBoolean() ? "http" : "https");
-        URI uri = new URI("/index/type/_api");
+
+        String expectedEndpoint = "/index/type/_api";
+        URI uri;
+        if (randomBoolean()) {
+            uri = new URI(expectedEndpoint);
+        } else {
+            uri = new URI("index/type/_api");
+        }
 
         HttpRequestBase request;
-        int requestType = RandomInts.randomIntBetween(getRandom(), 0, 7);
+        int requestType = RandomNumbers.randomIntBetween(getRandom(), 0, 7);
         switch(requestType) {
             case 0:
                 request = new HttpGetWithEntity(uri);
@@ -83,21 +92,31 @@ public class RequestLoggerTests extends RestClientTestCase {
                 throw new UnsupportedOperationException();
         }
 
-        String expected = "curl -iX " + request.getMethod() + " '" + host + uri + "'";
+        String expected = "curl -iX " + request.getMethod() + " '" + host + expectedEndpoint + "'";
         boolean hasBody = request instanceof HttpEntityEnclosingRequest && getRandom().nextBoolean();
         String requestBody = "{ \"field\": \"value\" }";
         if (hasBody) {
             expected += " -d '" + requestBody + "'";
             HttpEntityEnclosingRequest enclosingRequest = (HttpEntityEnclosingRequest) request;
             HttpEntity entity;
-            if (getRandom().nextBoolean()) {
-                entity = new StringEntity(requestBody, StandardCharsets.UTF_8);
-            } else {
-                entity = new InputStreamEntity(new ByteArrayInputStream(requestBody.getBytes(StandardCharsets.UTF_8)));
+            switch(RandomNumbers.randomIntBetween(getRandom(), 0, 3)) {
+                case 0:
+                    entity = new StringEntity(requestBody, StandardCharsets.UTF_8);
+                    break;
+                case 1:
+                    entity = new InputStreamEntity(new ByteArrayInputStream(requestBody.getBytes(StandardCharsets.UTF_8)));
+                    break;
+                case 2:
+                    entity = new NStringEntity(requestBody, StandardCharsets.UTF_8);
+                    break;
+                case 3:
+                    entity = new NByteArrayEntity(requestBody.getBytes(StandardCharsets.UTF_8));
+                    break;
+                default:
+                    throw new UnsupportedOperationException();
             }
             enclosingRequest.setEntity(entity);
         }
-
         String traceRequest = RequestLogger.buildTraceRequest(request, host);
         assertThat(traceRequest, equalTo(expected));
         if (hasBody) {
@@ -109,12 +128,12 @@ public class RequestLoggerTests extends RestClientTestCase {
 
     public void testTraceResponse() throws IOException {
         ProtocolVersion protocolVersion = new ProtocolVersion("HTTP", 1, 1);
-        int statusCode = RandomInts.randomIntBetween(getRandom(), 200, 599);
+        int statusCode = RandomNumbers.randomIntBetween(getRandom(), 200, 599);
         String reasonPhrase = "REASON";
         BasicStatusLine statusLine = new BasicStatusLine(protocolVersion, statusCode, reasonPhrase);
         String expected = "# " + statusLine.toString();
         BasicHttpResponse httpResponse = new BasicHttpResponse(statusLine);
-        int numHeaders = RandomInts.randomIntBetween(getRandom(), 0, 3);
+        int numHeaders = RandomNumbers.randomIntBetween(getRandom(), 0, 3);
         for (int i = 0; i < numHeaders; i++) {
             httpResponse.setHeader("header" + i, "value");
             expected += "\n# header" + i + ": value";
@@ -130,6 +149,7 @@ public class RequestLoggerTests extends RestClientTestCase {
             if (getRandom().nextBoolean()) {
                 entity = new StringEntity(responseBody, StandardCharsets.UTF_8);
             } else {
+                //test a non repeatable entity
                 entity = new InputStreamEntity(new ByteArrayInputStream(responseBody.getBytes(StandardCharsets.UTF_8)));
             }
             httpResponse.setEntity(entity);

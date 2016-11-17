@@ -42,7 +42,10 @@ import org.elasticsearch.index.query.QueryBuilders;
 import org.elasticsearch.index.query.QueryShardException;
 import org.elasticsearch.index.query.functionscore.WeightBuilder;
 import org.elasticsearch.plugins.Plugin;
-import org.elasticsearch.search.highlight.HighlightBuilder;
+import org.elasticsearch.script.MockScriptPlugin;
+import org.elasticsearch.script.Script;
+import org.elasticsearch.script.ScriptService;
+import org.elasticsearch.search.fetch.subphase.highlight.HighlightBuilder;
 import org.elasticsearch.test.ESIntegTestCase;
 
 import java.io.IOException;
@@ -59,13 +62,13 @@ import java.util.Map;
 import java.util.NavigableSet;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.function.Function;
 
 import static org.elasticsearch.percolator.PercolateSourceBuilder.docBuilder;
 import static org.elasticsearch.common.xcontent.XContentFactory.jsonBuilder;
 import static org.elasticsearch.common.xcontent.XContentFactory.smileBuilder;
 import static org.elasticsearch.common.xcontent.XContentFactory.yamlBuilder;
 import static org.elasticsearch.index.query.QueryBuilders.boolQuery;
-import static org.elasticsearch.index.query.QueryBuilders.constantScoreQuery;
 import static org.elasticsearch.index.query.QueryBuilders.functionScoreQuery;
 import static org.elasticsearch.index.query.QueryBuilders.geoShapeQuery;
 import static org.elasticsearch.index.query.QueryBuilders.hasChildQuery;
@@ -91,13 +94,14 @@ import static org.hamcrest.Matchers.nullValue;
 
 public class PercolatorIT extends ESIntegTestCase {
 
-    private final static String INDEX_NAME = "queries";
-    private final static String TYPE_NAME = "query";
+    private static final String INDEX_NAME = "queries";
+    private static final String TYPE_NAME = "query";
 
     @Override
     protected Collection<Class<? extends Plugin>> nodePlugins() {
         return Collections.singleton(PercolatorPlugin.class);
     }
+
 
     @Override
     protected Collection<Class<? extends Plugin>> transportClientPlugins() {
@@ -1553,31 +1557,6 @@ public class PercolatorIT extends ESIntegTestCase {
         }
     }
 
-    public void testPercolatorQueryWithNowRange() throws Exception {
-        client().admin().indices().prepareCreate(INDEX_NAME)
-                .addMapping("my-type", "timestamp", "type=date,format=epoch_millis")
-                .addMapping(TYPE_NAME, "query", "type=percolator")
-                .get();
-        ensureGreen();
-
-        client().prepareIndex(INDEX_NAME, TYPE_NAME, "1")
-                .setSource(jsonBuilder().startObject().field("query", rangeQuery("timestamp").from("now-1d").to("now")).endObject())
-                .get();
-        client().prepareIndex(INDEX_NAME, TYPE_NAME, "2")
-                .setSource(jsonBuilder().startObject().field("query", constantScoreQuery(rangeQuery("timestamp").from("now-1d").to("now"))).endObject())
-                .get();
-        refresh();
-
-        logger.info("--> Percolate doc with field1=b");
-        PercolateResponse response = preparePercolate(client())
-                .setIndices(INDEX_NAME).setDocumentType("my-type")
-                .setPercolateDoc(docBuilder().setDoc("timestamp", System.currentTimeMillis()))
-                .get();
-        assertMatchCount(response, 2L);
-        assertThat(response.getMatches(), arrayWithSize(2));
-        assertThat(convertFromTextArray(response.getMatches(), INDEX_NAME), arrayContainingInAnyOrder("1", "2"));
-    }
-
     void initNestedIndexAndPercolation() throws IOException {
         XContentBuilder mapping = XContentFactory.jsonBuilder();
         mapping.startObject().startObject("properties").startObject("companyname").field("type", "text").endObject()
@@ -1802,16 +1781,15 @@ public class PercolatorIT extends ESIntegTestCase {
         assertThat(response1.getMatches()[0].getId().string(), equalTo("1"));
     }
 
-    public void testParentChild() throws Exception {
-        // We don't fail p/c queries, but those queries are unusable because only a single document can be provided in
-        // the percolate api
-
+    public void testFailParentChild() throws Exception {
         assertAcked(prepareCreate(INDEX_NAME)
                 .addMapping(TYPE_NAME, "query", "type=percolator")
                 .addMapping("child", "_parent", "type=parent").addMapping("parent"));
-        client().prepareIndex(INDEX_NAME, TYPE_NAME, "1")
+        Exception e = expectThrows(MapperParsingException.class, () -> client().prepareIndex(INDEX_NAME, TYPE_NAME, "1")
                 .setSource(jsonBuilder().startObject().field("query", hasChildQuery("child", matchAllQuery(), ScoreMode.None)).endObject())
-                .execute().actionGet();
+                .get());
+        assertThat(e.getCause(), instanceOf(IllegalArgumentException.class));
+        assertThat(e.getCause().getMessage(), equalTo("the [has_child] query is unsupported inside a percolator query"));
     }
 
     public void testPercolateDocumentWithParentField() throws Exception {

@@ -30,6 +30,8 @@ import org.elasticsearch.script.ScriptEngineService;
 import org.elasticsearch.test.ESTestCase;
 import org.hamcrest.Matcher;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
@@ -42,10 +44,7 @@ import java.util.Set;
 import static java.util.Collections.singleton;
 import static java.util.Collections.singletonMap;
 import static org.elasticsearch.common.xcontent.XContentFactory.jsonBuilder;
-import static org.elasticsearch.script.ScriptService.ScriptType.INLINE;
-import static org.elasticsearch.script.mustache.MustacheScriptEngineService.CONTENT_TYPE_PARAM;
-import static org.elasticsearch.script.mustache.MustacheScriptEngineService.JSON_CONTENT_TYPE;
-import static org.elasticsearch.script.mustache.MustacheScriptEngineService.PLAIN_TEXT_CONTENT_TYPE;
+import static org.elasticsearch.script.ScriptType.INLINE;
 import static org.hamcrest.Matchers.both;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
@@ -72,7 +71,7 @@ public class MustacheTests extends ESTestCase {
                 "Mustache templating broken",
                 "GET _search {\"query\": {\"boosting\": {\"positive\": {\"match\": {\"body\": \"gift\"}},"
                         + "\"negative\": {\"term\": {\"body\": {\"value\": \"solr\"}}}, \"negative_boost\": 0.2 } }}",
-                ((BytesReference) result.run()).toUtf8()
+                ((BytesReference) result.run()).utf8ToString()
         );
     }
 
@@ -88,7 +87,7 @@ public class MustacheTests extends ESTestCase {
         assertThat(output, notNullValue());
         assertThat(output, instanceOf(BytesReference.class));
         BytesReference bytes = (BytesReference) output;
-        assertThat(bytes.toUtf8(), equalTo("foo bar"));
+        assertThat(bytes.utf8ToString(), equalTo("foo bar"));
 
         // Sets can come out in any order
         Set<String> setData = new HashSet<>();
@@ -99,7 +98,7 @@ public class MustacheTests extends ESTestCase {
         assertThat(output, notNullValue());
         assertThat(output, instanceOf(BytesReference.class));
         bytes = (BytesReference) output;
-        assertThat(bytes.toUtf8(), both(containsString("foo")).and(containsString("bar")));
+        assertThat(bytes.utf8ToString(), both(containsString("foo")).and(containsString("bar")));
     }
 
     public void testArrayInArrayAccess() throws Exception {
@@ -116,7 +115,7 @@ public class MustacheTests extends ESTestCase {
         assertThat(output, notNullValue());
         assertThat(output, instanceOf(BytesReference.class));
         BytesReference bytes = (BytesReference) output;
-        assertThat(bytes.toUtf8(), equalTo("foo bar"));
+        assertThat(bytes.utf8ToString(), equalTo("foo bar"));
     }
 
     public void testMapInArrayAccess() throws Exception {
@@ -131,7 +130,7 @@ public class MustacheTests extends ESTestCase {
         assertThat(output, notNullValue());
         assertThat(output, instanceOf(BytesReference.class));
         BytesReference bytes = (BytesReference) output;
-        assertThat(bytes.toUtf8(), equalTo("foo bar"));
+        assertThat(bytes.utf8ToString(), equalTo("foo bar"));
 
         // HashSet iteration order isn't fixed
         Set<Object> setData = new HashSet<>();
@@ -142,27 +141,9 @@ public class MustacheTests extends ESTestCase {
         assertThat(output, notNullValue());
         assertThat(output, instanceOf(BytesReference.class));
         bytes = (BytesReference) output;
-        assertThat(bytes.toUtf8(), both(containsString("foo")).and(containsString("bar")));
+        assertThat(bytes.utf8ToString(), both(containsString("foo")).and(containsString("bar")));
     }
 
-    public void testEscaping() {
-        // json string escaping enabled:
-        Map<String, String> params = randomBoolean() ? Collections.emptyMap() : Collections.singletonMap(CONTENT_TYPE_PARAM, JSON_CONTENT_TYPE);
-        Mustache mustache = (Mustache) engine.compile(null, "{ \"field1\": \"{{value}}\"}", Collections.emptyMap());
-        CompiledScript compiledScript = new CompiledScript(INLINE, "name", "mustache", mustache);
-        ExecutableScript executableScript = engine.executable(compiledScript, Collections.singletonMap("value", "a \"value\""));
-        BytesReference rawResult = (BytesReference) executableScript.run();
-        String result = rawResult.toUtf8();
-        assertThat(result, equalTo("{ \"field1\": \"a \\\"value\\\"\"}"));
-
-        // json string escaping disabled:
-        mustache = (Mustache) engine.compile(null, "{ \"field1\": \"{{value}}\"}", Collections.singletonMap(CONTENT_TYPE_PARAM, PLAIN_TEXT_CONTENT_TYPE));
-        compiledScript = new CompiledScript(INLINE, "name", "mustache", mustache);
-        executableScript = engine.executable(compiledScript, Collections.singletonMap("value", "a \"value\""));
-        rawResult = (BytesReference) executableScript.run();
-        result = rawResult.toUtf8();
-        assertThat(result, equalTo("{ \"field1\": \"a \"value\"\"}"));
-    }
 
     public void testSizeAccessForCollectionsAndArrays() throws Exception {
         String[] randomArrayValues = generateRandomStringArray(10, 20, false);
@@ -182,7 +163,7 @@ public class MustacheTests extends ESTestCase {
 
         BytesReference bytes = (BytesReference) output;
         String expectedString = String.format(Locale.ROOT, "%s %s", randomArrayValues.length, randomList.size());
-        assertThat(bytes.toUtf8(), equalTo(expectedString));
+        assertThat(bytes.utf8ToString(), equalTo(expectedString));
     }
 
     public void testPrimitiveToJSON() throws Exception {
@@ -236,10 +217,12 @@ public class MustacheTests extends ESTestCase {
         Map<String, Object> ctx = Collections.singletonMap("ctx", humans);
 
         assertScript("{{#toJson}}.{{/toJson}}", ctx,
-                equalTo("{\"ctx\":{\"first\":{\"name\":\"John Smith\",\"age\":42,\"height\":1.84},\"second\":{\"name\":\"Dave Smith\",\"age\":27,\"height\":1.71}}}"));
+                equalTo("{\"ctx\":{\"first\":{\"name\":\"John Smith\",\"age\":42,\"height\":1.84},\"second\":" +
+                        "{\"name\":\"Dave Smith\",\"age\":27,\"height\":1.71}}}"));
 
         assertScript("{{#toJson}}ctx{{/toJson}}", ctx,
-                equalTo("{\"first\":{\"name\":\"John Smith\",\"age\":42,\"height\":1.84},\"second\":{\"name\":\"Dave Smith\",\"age\":27,\"height\":1.71}}"));
+                equalTo("{\"first\":{\"name\":\"John Smith\",\"age\":42,\"height\":1.84},\"second\":" +
+                        "{\"name\":\"Dave Smith\",\"age\":27,\"height\":1.71}}"));
 
         assertScript("{{#toJson}}ctx.first{{/toJson}}", ctx,
                 equalTo("{\"name\":\"John Smith\",\"age\":42,\"height\":1.84}"));
@@ -374,11 +357,49 @@ public class MustacheTests extends ESTestCase {
         assertScript("{{#join delimiter=' and '}}params{{/join delimiter=' and '}}", params, equalTo("1 and 2 and 3 and 4"));
     }
 
+    public void testUrlEncoder() {
+        Map<String, String> urls = new HashMap<>();
+        urls.put("https://www.elastic.co",
+                "https%3A%2F%2Fwww.elastic.co");
+        urls.put("<logstash-{now/d}>",
+                "%3Clogstash-%7Bnow%2Fd%7D%3E");
+        urls.put("?query=(foo:A OR baz:B) AND title:/joh?n(ath[oa]n)/ AND date:{* TO 2012-01}",
+                "%3Fquery%3D%28foo%3AA+OR+baz%3AB%29+AND+title%3A%2Fjoh%3Fn%28ath%5Boa%5Dn%29%2F+AND+date%3A%7B*+TO+2012-01%7D");
+
+        for (Map.Entry<String, String> url : urls.entrySet()) {
+            assertScript("{{#url}}{{params}}{{/url}}", singletonMap("params", url.getKey()), equalTo(url.getValue()));
+        }
+    }
+
+    public void testUrlEncoderWithParam() throws Exception {
+        assertScript("{{#url}}{{index}}{{/url}}", singletonMap("index", "<logstash-{now/d{YYYY.MM.dd|+12:00}}>"),
+                equalTo("%3Clogstash-%7Bnow%2Fd%7BYYYY.MM.dd%7C%2B12%3A00%7D%7D%3E"));
+
+        final String random = randomAsciiOfLength(10);
+        assertScript("{{#url}}prefix_{{s}}{{/url}}", singletonMap("s", random),
+                equalTo("prefix_" + URLEncoder.encode(random, StandardCharsets.UTF_8.name())));
+    }
+
+    public void testUrlEncoderWithJoin() {
+        Map<String, Object> params = singletonMap("emails", Arrays.asList("john@smith.com", "john.smith@email.com", "jsmith@email.com"));
+        assertScript("?query={{#url}}{{#join}}emails{{/join}}{{/url}}", params,
+                equalTo("?query=john%40smith.com%2Cjohn.smith%40email.com%2Cjsmith%40email.com"));
+
+        params = singletonMap("indices", new String[]{"<logstash-{now/d-2d}>", "<logstash-{now/d-1d}>", "<logstash-{now/d}>"});
+        assertScript("{{#url}}https://localhost:9200/{{#join}}indices{{/join}}/_stats{{/url}}", params,
+                equalTo("https%3A%2F%2Flocalhost%3A9200%2F%3Clogstash-%7Bnow%2Fd-2d%7D" +
+                        "%3E%2C%3Clogstash-%7Bnow%2Fd-1d%7D%3E%2C%3Clogstash-%7Bnow%2Fd%7D%3E%2F_stats"));
+
+        params = singletonMap("fibonacci", new int[]{1, 1, 2, 3, 5, 8, 13, 21, 34, 55});
+        assertScript("{{#url}}{{#join delimiter='+'}}fibonacci{{/join delimiter='+'}}{{/url}}", params,
+                equalTo("1%2B1%2B2%2B3%2B5%2B8%2B13%2B21%2B34%2B55"));
+    }
+
     private void assertScript(String script, Map<String, Object> vars, Matcher<Object> matcher) {
         Object result = engine.executable(new CompiledScript(INLINE, "inline", "mustache", compile(script)), vars).run();
         assertThat(result, notNullValue());
         assertThat(result, instanceOf(BytesReference.class));
-        assertThat(((BytesReference) result).toUtf8(), matcher);
+        assertThat(((BytesReference) result).utf8ToString(), matcher);
     }
 
     private Object compile(String script) {

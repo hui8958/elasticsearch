@@ -34,9 +34,9 @@ import org.elasticsearch.common.compress.CompressedXContent;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.xcontent.XContentFactory;
 import org.elasticsearch.index.IndexService;
+import org.elasticsearch.index.mapper.KeywordFieldMapper.KeywordFieldType;
 import org.elasticsearch.index.mapper.MapperService.MergeReason;
-import org.elasticsearch.index.mapper.core.KeywordFieldMapper.KeywordFieldType;
-import org.elasticsearch.index.mapper.core.NumberFieldMapper.NumberFieldType;
+import org.elasticsearch.index.mapper.NumberFieldMapper.NumberFieldType;
 import org.elasticsearch.test.ESSingleNodeTestCase;
 
 import static org.hamcrest.CoreMatchers.containsString;
@@ -103,7 +103,7 @@ public class MapperServiceTests extends ESSingleNodeTestCase {
 
         // 2. already existing index
         IndexService indexService = createIndex("index2");
-        expectThrows(ExecutionException.class, () -> {
+        e = expectThrows(ExecutionException.class, () -> {
             client().prepareIndex("index1", MapperService.DEFAULT_MAPPING, "2").setSource().execute().get();
         });
         throwable = ExceptionsHelper.unwrapCause(e.getCause());

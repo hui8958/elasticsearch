@@ -19,12 +19,12 @@
 
 package org.elasticsearch.search.aggregations.metrics.valuecount;
 
-import org.elasticsearch.common.ParseField;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.search.aggregations.AggregatorFactories;
 import org.elasticsearch.search.aggregations.AggregatorFactory;
+import org.elasticsearch.search.aggregations.InternalAggregation.Type;
 import org.elasticsearch.search.aggregations.support.AggregationContext;
 import org.elasticsearch.search.aggregations.support.ValueType;
 import org.elasticsearch.search.aggregations.support.ValuesSource;
@@ -35,18 +35,18 @@ import org.elasticsearch.search.aggregations.support.ValuesSourceType;
 import java.io.IOException;
 
 public class ValueCountAggregationBuilder extends ValuesSourceAggregationBuilder.LeafOnly<ValuesSource, ValueCountAggregationBuilder> {
-    public static final String NAME = InternalValueCount.TYPE.name();
-    public static final ParseField AGGREGATION_NAME_FIELD = new ParseField(NAME);
+    public static final String NAME = "value_count";
+    public static final Type TYPE = new Type(NAME);
 
     public ValueCountAggregationBuilder(String name, ValueType targetValueType) {
-        super(name, InternalValueCount.TYPE, ValuesSourceType.ANY, targetValueType);
+        super(name, TYPE, ValuesSourceType.ANY, targetValueType);
     }
 
     /**
      * Read from a stream.
      */
     public ValueCountAggregationBuilder(StreamInput in) throws IOException {
-        super(in, InternalValueCount.TYPE, ValuesSourceType.ANY);
+        super(in, TYPE, ValuesSourceType.ANY);
     }
 
     @Override

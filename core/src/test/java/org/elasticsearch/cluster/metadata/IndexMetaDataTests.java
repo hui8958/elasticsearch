@@ -20,7 +20,6 @@
 package org.elasticsearch.cluster.metadata;
 
 import org.elasticsearch.common.io.stream.BytesStreamOutput;
-import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.util.set.Sets;
 import org.elasticsearch.common.xcontent.ToXContent;
@@ -69,7 +68,7 @@ public class IndexMetaDataTests extends ESTestCase {
 
         final BytesStreamOutput out = new BytesStreamOutput();
         metaData.writeTo(out);
-        IndexMetaData deserialized = IndexMetaData.PROTO.readFrom(StreamInput.wrap(out.bytes()));
+        IndexMetaData deserialized = IndexMetaData.PROTO.readFrom(out.bytes().streamInput());
         assertEquals(metaData, deserialized);
         assertEquals(metaData.hashCode(), deserialized.hashCode());
 

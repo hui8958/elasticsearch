@@ -41,7 +41,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
 
-public class MultiTermVectorsRequest extends ActionRequest<MultiTermVectorsRequest> implements Iterable<TermVectorsRequest>, CompositeIndicesRequest, RealtimeRequest {
+public class MultiTermVectorsRequest extends ActionRequest implements Iterable<TermVectorsRequest>, CompositeIndicesRequest, RealtimeRequest {
 
     String preference;
     List<TermVectorsRequest> requests = new ArrayList<>();
@@ -94,7 +94,7 @@ public class MultiTermVectorsRequest extends ActionRequest<MultiTermVectorsReque
         return requests;
     }
 
-    public void add(TermVectorsRequest template, BytesReference data) throws Exception {
+    public void add(TermVectorsRequest template, BytesReference data) throws IOException {
         XContentParser.Token token;
         String currentFieldName = null;
         if (data.length() > 0) {

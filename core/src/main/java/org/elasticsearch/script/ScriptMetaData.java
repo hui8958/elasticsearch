@@ -23,13 +23,11 @@ import org.elasticsearch.cluster.AbstractDiffable;
 import org.elasticsearch.cluster.Diff;
 import org.elasticsearch.cluster.DiffableUtils;
 import org.elasticsearch.cluster.metadata.MetaData;
-import org.elasticsearch.common.ParseFieldMatcher;
 import org.elasticsearch.common.ParsingException;
+import org.elasticsearch.common.bytes.BytesArray;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
-import org.elasticsearch.common.io.stream.Writeable;
-import org.elasticsearch.common.xcontent.ToXContent;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentFactory;
 import org.elasticsearch.common.xcontent.XContentHelper;
@@ -42,13 +40,11 @@ import java.util.Collections;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Objects;
-import java.util.Optional;
 
 public final class ScriptMetaData implements MetaData.Custom {
 
-    public final static String TYPE = "stored_scripts";
-    public final static ScriptMetaData PROTO = new ScriptMetaData(Collections.emptyMap());
+    public static final String TYPE = "stored_scripts";
+    public static final ScriptMetaData PROTO = new ScriptMetaData(Collections.emptyMap());
 
     private final Map<String, ScriptAsBytes> scripts;
 
@@ -70,7 +66,10 @@ public final class ScriptMetaData implements MetaData.Custom {
         if (scriptAsBytes == null) {
             return null;
         }
+        return scriptAsBytes.utf8ToString();
+    }
 
+    public static String parseStoredScript(BytesReference scriptAsBytes) {
         // Scripts can be stored via API in several ways:
         // 1) wrapped into a 'script' json object or field
         // 2) wrapped into a 'template' json object or field
@@ -80,6 +79,9 @@ public final class ScriptMetaData implements MetaData.Custom {
              XContentBuilder builder = XContentFactory.contentBuilder(XContentType.JSON)) {
             parser.nextToken();
             parser.nextToken();
+            if (parser.currentToken() == Token.END_OBJECT) {
+                throw new IllegalArgumentException("Empty script");
+            }
             switch (parser.currentName()) {
                 case "script":
                 case "template":
@@ -117,10 +119,8 @@ public final class ScriptMetaData implements MetaData.Custom {
                 case FIELD_NAME:
                     key = parser.currentName();
                     break;
-                case START_OBJECT:
-                    XContentBuilder contentBuilder = XContentBuilder.builder(parser.contentType().xContent());
-                    contentBuilder.copyCurrentStructure(parser);
-                    scripts.put(key, new ScriptAsBytes(contentBuilder.bytes()));
+                case VALUE_STRING:
+                    scripts.put(key, new ScriptAsBytes(new BytesArray(parser.text())));
                     break;
                 default:
                     throw new ParsingException(parser.getTokenLocation(), "Unexpected token [" + token + "]");
@@ -131,7 +131,7 @@ public final class ScriptMetaData implements MetaData.Custom {
 
     @Override
     public EnumSet<MetaData.XContentContext> context() {
-        return MetaData.API_AND_GATEWAY;
+        return MetaData.ALL_CONTEXTS;
     }
 
     @Override
@@ -149,7 +149,7 @@ public final class ScriptMetaData implements MetaData.Custom {
     @Override
     public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
         for (Map.Entry<String, ScriptAsBytes> entry : scripts.entrySet()) {
-            builder.rawField(entry.getKey(), entry.getValue().script);
+            builder.field(entry.getKey(), entry.getValue().script.utf8ToString());
         }
         return builder;
     }
@@ -190,8 +190,8 @@ public final class ScriptMetaData implements MetaData.Custom {
     @Override
     public String toString() {
         return "ScriptMetaData{" +
-                "scripts=" + scripts +
-                '}';
+            "scripts=" + scripts +
+            '}';
     }
 
     static String toKey(String language, String id) {
@@ -205,7 +205,7 @@ public final class ScriptMetaData implements MetaData.Custom {
         return language + "#" + id;
     }
 
-    final public static class Builder {
+    public static final class Builder {
 
         private Map<String, ScriptAsBytes> scripts;
 
@@ -218,7 +218,8 @@ public final class ScriptMetaData implements MetaData.Custom {
         }
 
         public Builder storeScript(String lang, String id, BytesReference script) {
-            scripts.put(toKey(lang, id), new ScriptAsBytes(script));
+            BytesReference scriptBytest = new BytesArray(parseStoredScript(script));
+            scripts.put(toKey(lang, id), new ScriptAsBytes(scriptBytest));
             return this;
         }
 
@@ -234,7 +235,7 @@ public final class ScriptMetaData implements MetaData.Custom {
         }
     }
 
-    final static class ScriptMetadataDiff implements Diff<MetaData.Custom> {
+    static final class ScriptMetadataDiff implements Diff<MetaData.Custom> {
 
         final Diff<Map<String, ScriptAsBytes>> pipelines;
 
@@ -257,7 +258,7 @@ public final class ScriptMetaData implements MetaData.Custom {
         }
     }
 
-    final static class ScriptAsBytes extends AbstractDiffable<ScriptAsBytes> {
+    static final class ScriptAsBytes extends AbstractDiffable<ScriptAsBytes> {
 
         public ScriptAsBytes(BytesReference script) {
             this.script = script;

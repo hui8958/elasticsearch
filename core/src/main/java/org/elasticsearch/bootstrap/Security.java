@@ -20,10 +20,10 @@
 package org.elasticsearch.bootstrap;
 
 import org.elasticsearch.SecureSM;
-import org.elasticsearch.Version;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.SuppressForbidden;
 import org.elasticsearch.common.io.PathUtils;
+import org.elasticsearch.common.network.NetworkModule;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.env.Environment;
 import org.elasticsearch.http.HttpTransportSettings;
@@ -114,13 +114,13 @@ final class Security {
      * @param environment configuration for generating dynamic permissions
      * @param filterBadDefaults true if we should filter out bad java defaults in the system policy.
      */
-    static void configure(Environment environment, boolean filterBadDefaults) throws Exception {
+    static void configure(Environment environment, boolean filterBadDefaults) throws IOException, NoSuchAlgorithmException {
 
         // enable security policy: union of template and environment-based paths, and possibly plugin permissions
         Policy.setPolicy(new ESPolicy(createPermissions(environment), getPluginPermissions(environment), filterBadDefaults));
 
         // enable security manager
-        System.setSecurityManager(new SecureSM());
+        System.setSecurityManager(new SecureSM(new String[] { "org.elasticsearch.bootstrap.", "org.elasticsearch.cli" }));
 
         // do some basic tests
         selfTest();
@@ -257,11 +257,6 @@ final class Security {
         for (Path path : environment.dataFiles()) {
             addPath(policy, Environment.PATH_DATA_SETTING.getKey(), path, "read,readlink,write,delete");
         }
-        // TODO: this should be removed in ES 6.0! We will no longer support data paths with the cluster as a folder
-        assert Version.CURRENT.major < 6 : "cluster name is no longer used in data path";
-        for (Path path : environment.dataWithClusterFiles()) {
-            addPathIfExists(policy, Environment.PATH_DATA_SETTING.getKey(), path, "read,readlink,write,delete");
-        }
         for (Path path : environment.repoFiles()) {
             addPath(policy, Environment.PATH_REPO_SETTING.getKey(), path, "read,readlink,write,delete");
         }
@@ -271,12 +266,14 @@ final class Security {
         }
     }
 
-    static void addBindPermissions(Permissions policy, Settings settings) throws IOException {
-        // http is simple
-        String httpRange = HttpTransportSettings.SETTING_HTTP_PORT.get(settings).getPortRangeString();
-        // listen is always called with 'localhost' but use wildcard to be sure, no name service is consulted.
-        // see SocketPermission implies() code
-        policy.add(new SocketPermission("*:" + httpRange, "listen,resolve"));
+    /**
+     * Add dynamic {@link SocketPermission}s based on HTTP and transport settings.
+     *
+     * @param policy the {@link Permissions} instance to apply the dynamic {@link SocketPermission}s to.
+     * @param settings the {@link Settings} instance to read the HTTP and transport settings from
+     */
+    static void addBindPermissions(Permissions policy, Settings settings) {
+        addSocketPermissionForHttp(policy, settings);
         // transport is waaaay overengineered
         Map<String, Settings> profiles = TransportSettings.TRANSPORT_PROFILES_SETTING.get(settings).getAsGroups();
         if (!profiles.containsKey(TransportSettings.DEFAULT_PROFILE)) {
@@ -285,20 +282,80 @@ final class Security {
         }
 
         // loop through all profiles and add permissions for each one, if its valid.
-        // (otherwise NettyTransport is lenient and ignores it)
+        // (otherwise Netty transports are lenient and ignores it)
         for (Map.Entry<String, Settings> entry : profiles.entrySet()) {
             Settings profileSettings = entry.getValue();
             String name = entry.getKey();
-            String transportRange = profileSettings.get("port", TransportSettings.PORT.get(settings));
 
             // a profile is only valid if its the default profile, or if it has an actual name and specifies a port
             boolean valid = TransportSettings.DEFAULT_PROFILE.equals(name) || (Strings.hasLength(name) && profileSettings.get("port") != null);
             if (valid) {
-                // listen is always called with 'localhost' but use wildcard to be sure, no name service is consulted.
-                // see SocketPermission implies() code
-                policy.add(new SocketPermission("*:" + transportRange, "listen,resolve"));
+                addSocketPermissionForTransportProfile(policy, profileSettings, settings);
             }
         }
+
+        for (final Settings tribeNodeSettings : settings.getGroups("tribe", true).values()) {
+            // tribe nodes have HTTP disabled by default, so we check if HTTP is enabled before granting
+            if (NetworkModule.HTTP_ENABLED.exists(tribeNodeSettings) && NetworkModule.HTTP_ENABLED.get(tribeNodeSettings)) {
+                addSocketPermissionForHttp(policy, tribeNodeSettings);
+            }
+            addSocketPermissionForTransport(policy, tribeNodeSettings);
+        }
+    }
+
+    /**
+     * Add dynamic {@link SocketPermission} based on HTTP settings.
+     *
+     * @param policy the {@link Permissions} instance to apply the dynamic {@link SocketPermission}s to.
+     * @param settings the {@link Settings} instance to read the HTTP settingsfrom
+     */
+    private static void addSocketPermissionForHttp(final Permissions policy, final Settings settings) {
+        // http is simple
+        final String httpRange = HttpTransportSettings.SETTING_HTTP_PORT.get(settings).getPortRangeString();
+        addSocketPermissionForPortRange(policy, httpRange);
+    }
+
+    /**
+     * Add dynamic {@link SocketPermission} based on transport settings. This method will first check if there is a port range specified in
+     * the transport profile specified by {@code profileSettings} and will fall back to {@code settings}.
+     *
+     * @param policy          the {@link Permissions} instance to apply the dynamic {@link SocketPermission}s to
+     * @param profileSettings the {@link Settings} to read the transport profile from
+     * @param settings        the {@link Settings} instance to read the transport settings from
+     */
+    private static void addSocketPermissionForTransportProfile(
+        final Permissions policy,
+        final Settings profileSettings,
+        final Settings settings) {
+        final String transportRange = profileSettings.get("port");
+        if (transportRange != null) {
+            addSocketPermissionForPortRange(policy, transportRange);
+        } else {
+            addSocketPermissionForTransport(policy, settings);
+        }
+    }
+
+    /**
+     * Add dynamic {@link SocketPermission} based on transport settings.
+     *
+     * @param policy          the {@link Permissions} instance to apply the dynamic {@link SocketPermission}s to
+     * @param settings        the {@link Settings} instance to read the transport settings from
+     */
+    private static void addSocketPermissionForTransport(final Permissions policy, final Settings settings) {
+        final String transportRange = TransportSettings.PORT.get(settings);
+        addSocketPermissionForPortRange(policy, transportRange);
+    }
+
+    /**
+     * Add dynamic {@link SocketPermission} for the specified port range.
+     *
+     * @param policy the {@link Permissions} instance to apply the dynamic {@link SocketPermission} to.
+     * @param portRange the port range
+     */
+    private static void addSocketPermissionForPortRange(final Permissions policy, final String portRange) {
+        // listen is always called with 'localhost' but use wildcard to be sure, no name service is consulted.
+        // see SocketPermission implies() code
+        policy.add(new SocketPermission("*:" + portRange, "listen,resolve"));
     }
 
     /**

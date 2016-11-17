@@ -16,11 +16,12 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+
 package org.elasticsearch.percolator;
 
 import org.elasticsearch.action.get.GetRequest;
 import org.elasticsearch.action.support.IndicesOptions;
-import org.elasticsearch.client.Client;
+import org.elasticsearch.client.node.NodeClient;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.settings.Settings;
@@ -29,37 +30,37 @@ import org.elasticsearch.rest.BaseRestHandler;
 import org.elasticsearch.rest.RestChannel;
 import org.elasticsearch.rest.RestController;
 import org.elasticsearch.rest.RestRequest;
-import org.elasticsearch.rest.action.support.RestActions;
-import org.elasticsearch.rest.action.support.RestToXContentListener;
+import org.elasticsearch.rest.action.RestActions;
+import org.elasticsearch.rest.action.RestToXContentListener;
+
+import java.io.IOException;
 
 import static org.elasticsearch.rest.RestRequest.Method.GET;
 import static org.elasticsearch.rest.RestRequest.Method.POST;
 
+@Deprecated
 public class RestPercolateAction extends BaseRestHandler {
 
-    private final TransportPercolateAction action;
-
     @Inject
-    public RestPercolateAction(Settings settings, RestController controller, Client client, TransportPercolateAction action) {
-        super(settings, client);
-        this.action = action;
+    public RestPercolateAction(Settings settings, RestController controller) {
+        super(settings);
         controller.registerHandler(GET, "/{index}/{type}/_percolate", this);
         controller.registerHandler(POST, "/{index}/{type}/_percolate", this);
 
-        RestPercolateExistingDocHandler existingDocHandler = new RestPercolateExistingDocHandler(settings, controller, client);
+        RestPercolateExistingDocHandler existingDocHandler = new RestPercolateExistingDocHandler(settings);
         controller.registerHandler(GET, "/{index}/{type}/{id}/_percolate", existingDocHandler);
         controller.registerHandler(POST, "/{index}/{type}/{id}/_percolate", existingDocHandler);
 
-        RestCountPercolateDocHandler countHandler = new RestCountPercolateDocHandler(settings, controller, client);
+        RestCountPercolateDocHandler countHandler = new RestCountPercolateDocHandler(settings);
         controller.registerHandler(GET, "/{index}/{type}/_percolate/count", countHandler);
         controller.registerHandler(POST, "/{index}/{type}/_percolate/count", countHandler);
 
-        RestCountPercolateExistingDocHandler countExistingDocHandler = new RestCountPercolateExistingDocHandler(settings, controller, client);
+        RestCountPercolateExistingDocHandler countExistingDocHandler = new RestCountPercolateExistingDocHandler(settings);
         controller.registerHandler(GET, "/{index}/{type}/{id}/_percolate/count", countExistingDocHandler);
         controller.registerHandler(POST, "/{index}/{type}/{id}/_percolate/count", countExistingDocHandler);
     }
 
-    void parseDocPercolate(PercolateRequest percolateRequest, RestRequest restRequest, RestChannel restChannel, final Client client) {
+    private RestChannelConsumer parseDocPercolate(PercolateRequest percolateRequest, RestRequest restRequest, NodeClient client) {
         percolateRequest.indices(Strings.splitStringByCommaToArray(restRequest.param("index")));
         percolateRequest.documentType(restRequest.param("type"));
         percolateRequest.routing(restRequest.param("routing"));
@@ -67,10 +68,10 @@ public class RestPercolateAction extends BaseRestHandler {
         percolateRequest.source(RestActions.getRestContent(restRequest));
 
         percolateRequest.indicesOptions(IndicesOptions.fromRequest(restRequest, percolateRequest.indicesOptions()));
-        executePercolate(percolateRequest, restChannel);
+        return channel -> executePercolate(client, percolateRequest, channel);
     }
 
-    void parseExistingDocPercolate(PercolateRequest percolateRequest, RestRequest restRequest, RestChannel restChannel, final Client client) {
+    private RestChannelConsumer parseExistingDocPercolate(PercolateRequest percolateRequest, RestRequest restRequest, NodeClient client) {
         String index = restRequest.param("index");
         String type = restRequest.param("type");
         percolateRequest.indices(Strings.splitStringByCommaToArray(restRequest.param("percolate_index", index)));
@@ -91,57 +92,61 @@ public class RestPercolateAction extends BaseRestHandler {
         percolateRequest.source(RestActions.getRestContent(restRequest));
 
         percolateRequest.indicesOptions(IndicesOptions.fromRequest(restRequest, percolateRequest.indicesOptions()));
-        executePercolate(percolateRequest, restChannel);
+        return channel -> executePercolate(client, percolateRequest, channel);
     }
 
-    void executePercolate(final PercolateRequest percolateRequest, final RestChannel restChannel) {
-        action.execute(percolateRequest, new RestToXContentListener<>(restChannel));
+    private void executePercolate(final NodeClient client, final PercolateRequest percolateRequest, final RestChannel restChannel) {
+        client.execute(PercolateAction.INSTANCE, percolateRequest, new RestToXContentListener<>(restChannel));
     }
 
     @Override
-    public void handleRequest(RestRequest restRequest, RestChannel restChannel, final Client client) {
+    public RestChannelConsumer prepareRequest(RestRequest restRequest, final NodeClient client) throws IOException {
         PercolateRequest percolateRequest = new PercolateRequest();
-        parseDocPercolate(percolateRequest, restRequest, restChannel, client);
+        return parseDocPercolate(percolateRequest, restRequest, client);
     }
 
-    final class RestCountPercolateDocHandler extends BaseRestHandler {
+    private final class RestCountPercolateDocHandler extends BaseRestHandler {
 
-        private RestCountPercolateDocHandler(Settings settings, final RestController controller, Client client) {
-            super(settings, client);
+        private RestCountPercolateDocHandler(Settings settings) {
+            super(settings);
         }
 
         @Override
-        public void handleRequest(RestRequest restRequest, RestChannel restChannel, final Client client) {
+        public RestChannelConsumer prepareRequest(RestRequest restRequest, final NodeClient client) throws IOException {
             PercolateRequest percolateRequest = new PercolateRequest();
             percolateRequest.onlyCount(true);
-            parseDocPercolate(percolateRequest, restRequest, restChannel, client);
+            return parseDocPercolate(percolateRequest, restRequest, client);
         }
+
     }
 
-    final class RestPercolateExistingDocHandler extends BaseRestHandler {
+    private final class RestPercolateExistingDocHandler extends BaseRestHandler {
 
-        protected RestPercolateExistingDocHandler(Settings settings, final RestController controller, Client client) {
-            super(settings, client);
+        RestPercolateExistingDocHandler(Settings settings) {
+            super(settings);
         }
 
         @Override
-        public void handleRequest(RestRequest restRequest, RestChannel restChannel, final Client client) {
+        public RestChannelConsumer prepareRequest(RestRequest restRequest, final NodeClient client) throws IOException {
             PercolateRequest percolateRequest = new PercolateRequest();
-            parseExistingDocPercolate(percolateRequest, restRequest, restChannel, client);
+            return parseExistingDocPercolate(percolateRequest, restRequest, client);
         }
+
     }
 
-    final class RestCountPercolateExistingDocHandler extends BaseRestHandler {
+    private final class RestCountPercolateExistingDocHandler extends BaseRestHandler {
 
-        protected RestCountPercolateExistingDocHandler(Settings settings, final RestController controller, Client client) {
-            super(settings, client);
+        RestCountPercolateExistingDocHandler(Settings settings) {
+            super(settings);
         }
 
         @Override
-        public void handleRequest(RestRequest restRequest, RestChannel restChannel, final Client client) {
+        public RestChannelConsumer prepareRequest(RestRequest restRequest, final NodeClient client) throws IOException {
             PercolateRequest percolateRequest = new PercolateRequest();
             percolateRequest.onlyCount(true);
-            parseExistingDocPercolate(percolateRequest, restRequest, restChannel, client);
+            return parseExistingDocPercolate(percolateRequest, restRequest, client);
         }
+
     }
+
 }

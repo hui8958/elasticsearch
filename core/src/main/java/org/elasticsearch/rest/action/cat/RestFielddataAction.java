@@ -23,17 +23,15 @@ import com.carrotsearch.hppc.cursors.ObjectLongCursor;
 import org.elasticsearch.action.admin.cluster.node.stats.NodeStats;
 import org.elasticsearch.action.admin.cluster.node.stats.NodesStatsRequest;
 import org.elasticsearch.action.admin.cluster.node.stats.NodesStatsResponse;
-import org.elasticsearch.client.Client;
+import org.elasticsearch.client.node.NodeClient;
 import org.elasticsearch.common.Table;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.ByteSizeValue;
-import org.elasticsearch.rest.RestChannel;
 import org.elasticsearch.rest.RestController;
 import org.elasticsearch.rest.RestRequest;
 import org.elasticsearch.rest.RestResponse;
-import org.elasticsearch.rest.action.support.RestResponseListener;
-import org.elasticsearch.rest.action.support.RestTable;
+import org.elasticsearch.rest.action.RestResponseListener;
 
 import static org.elasticsearch.rest.RestRequest.Method.GET;
 
@@ -43,21 +41,21 @@ import static org.elasticsearch.rest.RestRequest.Method.GET;
 public class RestFielddataAction extends AbstractCatAction {
 
     @Inject
-    public RestFielddataAction(Settings settings, RestController controller, Client client) {
-        super(settings, controller, client);
+    public RestFielddataAction(Settings settings, RestController controller) {
+        super(settings);
         controller.registerHandler(GET, "/_cat/fielddata", this);
         controller.registerHandler(GET, "/_cat/fielddata/{fields}", this);
     }
 
     @Override
-    protected void doRequest(final RestRequest request, final RestChannel channel, final Client client) {
+    protected RestChannelConsumer doCatRequest(final RestRequest request, final NodeClient client) {
         final NodesStatsRequest nodesStatsRequest = new NodesStatsRequest("data:true");
         nodesStatsRequest.clear();
         nodesStatsRequest.indices(true);
         String[] fields = request.paramAsStringArray("fields", null);
         nodesStatsRequest.indices().fieldDataFields(fields == null ? new String[] {"*"} : fields);
 
-        client.admin().cluster().nodesStats(nodesStatsRequest, new RestResponseListener<NodesStatsResponse>(channel) {
+        return channel -> client.admin().cluster().nodesStats(nodesStatsRequest, new RestResponseListener<NodesStatsResponse>(channel) {
             @Override
             public RestResponse buildResponse(NodesStatsResponse nodeStatses) throws Exception {
                 return RestTable.buildResponse(buildTable(request, nodeStatses), channel);

@@ -19,28 +19,26 @@
 
 package org.elasticsearch.ingest.common;
 
-import org.elasticsearch.cluster.service.ClusterService;
+import java.util.Map;
+
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.ingest.AbstractProcessor;
-import org.elasticsearch.ingest.AbstractProcessorFactory;
 import org.elasticsearch.ingest.IngestDocument;
-import org.elasticsearch.script.CompiledScript;
+import org.elasticsearch.ingest.Processor;
 import org.elasticsearch.script.ExecutableScript;
 import org.elasticsearch.script.Script;
 import org.elasticsearch.script.ScriptContext;
 import org.elasticsearch.script.ScriptService;
 
-import java.util.HashMap;
-import java.util.Map;
-
 import static java.util.Collections.emptyMap;
 import static org.elasticsearch.common.Strings.hasLength;
 import static org.elasticsearch.ingest.ConfigurationUtils.newConfigurationException;
+import static org.elasticsearch.ingest.ConfigurationUtils.readOptionalMap;
 import static org.elasticsearch.ingest.ConfigurationUtils.readOptionalStringProperty;
 import static org.elasticsearch.ingest.ConfigurationUtils.readStringProperty;
-import static org.elasticsearch.script.ScriptService.ScriptType.FILE;
-import static org.elasticsearch.script.ScriptService.ScriptType.INLINE;
-import static org.elasticsearch.script.ScriptService.ScriptType.STORED;
+import static org.elasticsearch.script.ScriptType.FILE;
+import static org.elasticsearch.script.ScriptType.INLINE;
+import static org.elasticsearch.script.ScriptType.STORED;
 
 /**
  * Processor that adds new fields with their corresponding values. If the field is already present, its value
@@ -52,27 +50,18 @@ public final class ScriptProcessor extends AbstractProcessor {
 
     private final Script script;
     private final ScriptService scriptService;
-    private final ClusterService clusterService;
-    private final String field;
 
-    ScriptProcessor(String tag, Script script, ScriptService scriptService, ClusterService clusterService, String field)  {
+    ScriptProcessor(String tag, Script script, ScriptService scriptService)  {
         super(tag);
         this.script = script;
         this.scriptService = scriptService;
-        this.clusterService = clusterService;
-        this.field = field;
     }
 
     @Override
     public void execute(IngestDocument document) {
-        Map<String, Object> vars = new HashMap<>();
-        vars.put("ctx", document.getSourceAndMetadata());
-        CompiledScript compiledScript = scriptService.compile(script, ScriptContext.Standard.INGEST, emptyMap(), clusterService.state());
-        ExecutableScript executableScript = scriptService.executable(compiledScript, vars);
-        Object value = executableScript.run();
-        if (field != null) {
-            document.setFieldValue(field, value);
-        }
+        ExecutableScript executableScript = scriptService.executable(script, ScriptContext.Standard.INGEST);
+        executableScript.setNextVar("ctx",  document.getSourceAndMetadata());
+        executableScript.run();
     }
 
     @Override
@@ -80,23 +69,27 @@ public final class ScriptProcessor extends AbstractProcessor {
         return TYPE;
     }
 
-    public static final class Factory extends AbstractProcessorFactory<ScriptProcessor> {
+    Script getScript() {
+        return script;
+    }
+
+    public static final class Factory implements Processor.Factory {
 
         private final ScriptService scriptService;
-        private final ClusterService clusterService;
 
-        public Factory(ScriptService scriptService, ClusterService clusterService) {
+        public Factory(ScriptService scriptService) {
             this.scriptService = scriptService;
-            this.clusterService = clusterService;
         }
 
         @Override
-        public ScriptProcessor doCreate(String processorTag, Map<String, Object> config) throws Exception {
-            String field = readOptionalStringProperty(TYPE, processorTag, config, "field");
-            String lang = readStringProperty(TYPE, processorTag, config, "lang");
+        @SuppressWarnings("unchecked")
+        public ScriptProcessor create(Map<String, Processor.Factory> registry, String processorTag,
+                                      Map<String, Object> config) throws Exception {
+            String lang = readOptionalStringProperty(TYPE, processorTag, config, "lang");
             String inline = readOptionalStringProperty(TYPE, processorTag, config, "inline");
             String file = readOptionalStringProperty(TYPE, processorTag, config, "file");
             String id = readOptionalStringProperty(TYPE, processorTag, config, "id");
+            Map<String, ?> params = readOptionalMap(TYPE, processorTag, config, "params");
 
             boolean containsNoScript = !hasLength(file) && !hasLength(id) && !hasLength(inline);
             if (containsNoScript) {
@@ -109,18 +102,26 @@ public final class ScriptProcessor extends AbstractProcessor {
                 throw newConfigurationException(TYPE, processorTag, null, "Only one of [file], [id], or [inline] may be configured");
             }
 
+            if (lang == null) {
+                lang = Script.DEFAULT_SCRIPT_LANG;
+            }
+
+            if (params == null) {
+                params = emptyMap();
+            }
+
             final Script script;
             if (Strings.hasLength(file)) {
-                script = new Script(file, FILE, lang, emptyMap());
+                script = new Script(FILE, lang, file, (Map<String, Object>)params);
             } else if (Strings.hasLength(inline)) {
-                script = new Script(inline, INLINE, lang, emptyMap());
+                script = new Script(INLINE, lang, inline, (Map<String, Object>)params);
             } else if (Strings.hasLength(id)) {
-                script = new Script(id, STORED, lang, emptyMap());
+                script = new Script(STORED, lang, id, (Map<String, Object>)params);
             } else {
                 throw newConfigurationException(TYPE, processorTag, null, "Could not initialize script");
             }
 
-            return new ScriptProcessor(processorTag, script, scriptService, clusterService, field);
+            return new ScriptProcessor(processorTag, script, scriptService);
         }
     }
 }

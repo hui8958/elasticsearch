@@ -21,12 +21,10 @@ package org.elasticsearch.index.mapper;
 
 import java.util.Objects;
 
+import org.elasticsearch.common.bytes.BytesArray;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.unit.TimeValue;
 
-/**
- *
- */
 public class SourceToParse {
 
     public static SourceToParse source(String index, String type, String id, BytesReference source) {
@@ -62,7 +60,7 @@ public class SourceToParse {
         this.id = Objects.requireNonNull(id);
         // we always convert back to byte array, since we store it and Field only supports bytes..
         // so, we might as well do it here, and improve the performance of working with direct byte arrays
-        this.source = source.toBytesArray();
+        this.source = new BytesArray(source.toBytesRef());
     }
 
     public Origin origin() {

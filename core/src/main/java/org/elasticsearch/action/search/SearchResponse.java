@@ -28,7 +28,7 @@ import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.common.xcontent.StatusToXContent;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.rest.RestStatus;
-import org.elasticsearch.rest.action.support.RestActions;
+import org.elasticsearch.rest.action.RestActions;
 import org.elasticsearch.search.SearchHits;
 import org.elasticsearch.search.aggregations.Aggregations;
 import org.elasticsearch.search.internal.InternalSearchResponse;
@@ -168,7 +168,7 @@ public class SearchResponse extends ActionResponse implements StatusToXContent {
      *
      * @return The profile results or an empty map
      */
-    public @Nullable Map<String, ProfileShardResult> getProfileResults() {
+    @Nullable public Map<String, ProfileShardResult> getProfileResults() {
         return internalResponse.profile();
     }
 

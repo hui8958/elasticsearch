@@ -29,7 +29,6 @@ import org.elasticsearch.action.support.ActionFilters;
 import org.elasticsearch.action.support.master.TransportMasterNodeAction;
 import org.elasticsearch.client.Client;
 import org.elasticsearch.cluster.ClusterState;
-import org.elasticsearch.cluster.ack.ClusterStateUpdateResponse;
 import org.elasticsearch.cluster.block.ClusterBlockException;
 import org.elasticsearch.cluster.block.ClusterBlockLevel;
 import org.elasticsearch.cluster.metadata.IndexMetaData;
@@ -40,7 +39,6 @@ import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.index.shard.DocsStats;
 import org.elasticsearch.index.shard.ShardId;
-import org.elasticsearch.indices.IndexAlreadyExistsException;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.TransportService;
 
@@ -93,26 +91,12 @@ public class TransportShrinkAction extends TransportMasterNodeAction<ShrinkReque
                         IndexShardStats shard = indicesStatsResponse.getIndex(sourceIndex).getIndexShards().get(i);
                         return shard == null ? null : shard.getPrimary().getDocs();
                     }, indexNameExpressionResolver);
-                createIndexService.createIndex(updateRequest, new ActionListener<ClusterStateUpdateResponse>() {
-                    @Override
-                    public void onResponse(ClusterStateUpdateResponse response) {
-                        listener.onResponse(new ShrinkResponse(response.isAcknowledged()));
-                    }
-
-                    @Override
-                    public void onFailure(Throwable t) {
-                        if (t instanceof IndexAlreadyExistsException) {
-                            logger.trace("[{}] failed to create shrink index", t, updateRequest.index());
-                        } else {
-                            logger.debug("[{}] failed to create shrink index", t, updateRequest.index());
-                        }
-                        listener.onFailure(t);
-                    }
-                });
+                createIndexService.createIndex(updateRequest, ActionListener.wrap(response ->
+                    listener.onResponse(new ShrinkResponse(response.isAcknowledged(), response.isShardsAcked())), listener::onFailure));
             }
 
             @Override
-            public void onFailure(Throwable e) {
+            public void onFailure(Exception e) {
                 listener.onFailure(e);
             }
         });
@@ -120,10 +104,10 @@ public class TransportShrinkAction extends TransportMasterNodeAction<ShrinkReque
     }
 
     // static for unittesting this method
-    static CreateIndexClusterStateUpdateRequest prepareCreateIndexRequest(final ShrinkRequest shrinkReqeust, final ClusterState state
+    static CreateIndexClusterStateUpdateRequest prepareCreateIndexRequest(final ShrinkRequest shrinkRequest, final ClusterState state
         , final IntFunction<DocsStats> perShardDocStats, IndexNameExpressionResolver indexNameExpressionResolver) {
-        final String sourceIndex = indexNameExpressionResolver.resolveDateMathExpression(shrinkReqeust.getSourceIndex());
-        final CreateIndexRequest targetIndex = shrinkReqeust.getShrinkIndexRequest();
+        final String sourceIndex = indexNameExpressionResolver.resolveDateMathExpression(shrinkRequest.getSourceIndex());
+        final CreateIndexRequest targetIndex = shrinkRequest.getShrinkIndexRequest();
         final String targetIndexName = indexNameExpressionResolver.resolveDateMathExpression(targetIndex.index());
         final IndexMetaData metaData = state.metaData().index(sourceIndex);
         final Settings targetIndexSettings = Settings.builder().put(targetIndex.settings())
@@ -153,7 +137,7 @@ public class TransportShrinkAction extends TransportMasterNodeAction<ShrinkReque
         targetIndex.settings(settingsBuilder);
 
         return new CreateIndexClusterStateUpdateRequest(targetIndex,
-            "shrink_index", targetIndexName, true)
+            "shrink_index", targetIndex.index(), targetIndexName, true)
             // mappings are updated on the node when merging in the shards, this prevents race-conditions since all mapping must be
             // applied once we took the snapshot and if somebody fucks things up and switches the index read/write and adds docs we miss
             // the mappings for everything is corrupted and hard to debug
@@ -162,6 +146,7 @@ public class TransportShrinkAction extends TransportMasterNodeAction<ShrinkReque
             .settings(targetIndex.settings())
             .aliases(targetIndex.aliases())
             .customs(targetIndex.customs())
+            .waitForActiveShards(targetIndex.waitForActiveShards())
             .shrinkFrom(metaData.getIndex());
     }
 

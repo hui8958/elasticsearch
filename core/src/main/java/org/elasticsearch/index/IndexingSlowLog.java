@@ -19,9 +19,9 @@
 
 package org.elasticsearch.index;
 
+import org.apache.logging.log4j.Logger;
 import org.elasticsearch.common.Booleans;
 import org.elasticsearch.common.Strings;
-import org.elasticsearch.common.logging.ESLogger;
 import org.elasticsearch.common.logging.Loggers;
 import org.elasticsearch.common.settings.Setting;
 import org.elasticsearch.common.settings.Setting.Property;
@@ -34,8 +34,6 @@ import org.elasticsearch.index.shard.IndexingOperationListener;
 import java.io.IOException;
 import java.util.concurrent.TimeUnit;
 
-/**
- */
 public final class IndexingSlowLog implements IndexingOperationListener {
     private final Index index;
     private boolean reformat;
@@ -52,7 +50,7 @@ public final class IndexingSlowLog implements IndexingOperationListener {
 
     private SlowLogLevel level;
 
-    private final ESLogger indexLogger;
+    private final Logger indexLogger;
 
     private static final String INDEX_INDEXING_SLOWLOG_PREFIX = "index.indexing.slowlog";
     public static final Setting<TimeValue> INDEX_INDEXING_SLOWLOG_THRESHOLD_INDEX_WARN_SETTING =
@@ -112,7 +110,7 @@ public final class IndexingSlowLog implements IndexingOperationListener {
 
     private void setLevel(SlowLogLevel level) {
         this.level = level;
-        this.indexLogger.setLevel(level.name());
+        Loggers.setLevel(this.indexLogger, level.name());
     }
 
     private void setWarnThreshold(TimeValue warnThreshold) {
@@ -135,23 +133,20 @@ public final class IndexingSlowLog implements IndexingOperationListener {
         this.reformat = reformat;
     }
 
-
     @Override
-    public void postIndex(Engine.Index index, boolean created) {
-        final long took = index.endTime() - index.startTime();
-        postIndexing(index.parsedDoc(), took);
-    }
-
-
-    private void postIndexing(ParsedDocument doc, long tookInNanos) {
-        if (indexWarnThreshold >= 0 && tookInNanos > indexWarnThreshold) {
-            indexLogger.warn("{}", new SlowLogParsedDocumentPrinter(index, doc, tookInNanos, reformat, maxSourceCharsToLog));
-        } else if (indexInfoThreshold >= 0 && tookInNanos > indexInfoThreshold) {
-            indexLogger.info("{}", new SlowLogParsedDocumentPrinter(index, doc, tookInNanos, reformat, maxSourceCharsToLog));
-        } else if (indexDebugThreshold >= 0 && tookInNanos > indexDebugThreshold) {
-            indexLogger.debug("{}", new SlowLogParsedDocumentPrinter(index, doc, tookInNanos, reformat, maxSourceCharsToLog));
-        } else if (indexTraceThreshold >= 0 && tookInNanos > indexTraceThreshold) {
-            indexLogger.trace("{}", new SlowLogParsedDocumentPrinter(index, doc, tookInNanos, reformat, maxSourceCharsToLog));
+    public void postIndex(Engine.Index indexOperation, Engine.IndexResult result) {
+        if (result.hasFailure() == false) {
+            final ParsedDocument doc = indexOperation.parsedDoc();
+            final long tookInNanos = result.getTook();
+            if (indexWarnThreshold >= 0 && tookInNanos > indexWarnThreshold) {
+                indexLogger.warn("{}", new SlowLogParsedDocumentPrinter(index, doc, tookInNanos, reformat, maxSourceCharsToLog));
+            } else if (indexInfoThreshold >= 0 && tookInNanos > indexInfoThreshold) {
+                indexLogger.info("{}", new SlowLogParsedDocumentPrinter(index, doc, tookInNanos, reformat, maxSourceCharsToLog));
+            } else if (indexDebugThreshold >= 0 && tookInNanos > indexDebugThreshold) {
+                indexLogger.debug("{}", new SlowLogParsedDocumentPrinter(index, doc, tookInNanos, reformat, maxSourceCharsToLog));
+            } else if (indexTraceThreshold >= 0 && tookInNanos > indexTraceThreshold) {
+                indexLogger.trace("{}", new SlowLogParsedDocumentPrinter(index, doc, tookInNanos, reformat, maxSourceCharsToLog));
+            }
         }
     }
 

@@ -21,7 +21,6 @@ package org.elasticsearch.test;
 import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.Version;
 import org.elasticsearch.cluster.ClusterChangedEvent;
-import org.elasticsearch.cluster.ClusterName;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.ClusterStateUpdateTask;
 import org.elasticsearch.cluster.NodeConnectionsService;
@@ -30,12 +29,12 @@ import org.elasticsearch.cluster.node.DiscoveryNodes;
 import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.settings.ClusterSettings;
 import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.common.transport.DummyTransportAddress;
 import org.elasticsearch.threadpool.ThreadPool;
 
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 
 import static junit.framework.TestCase.fail;
@@ -43,19 +42,24 @@ import static junit.framework.TestCase.fail;
 public class ClusterServiceUtils {
 
     public static ClusterService createClusterService(ThreadPool threadPool) {
+        DiscoveryNode discoveryNode = new DiscoveryNode("node", ESTestCase.buildNewFakeTransportAddress(), Collections.emptyMap(),
+                                                           new HashSet<>(Arrays.asList(DiscoveryNode.Role.values())),Version.CURRENT);
+        return createClusterService(threadPool, discoveryNode);
+    }
+
+    public static ClusterService createClusterService(ThreadPool threadPool, DiscoveryNode localNode) {
         ClusterService clusterService = new ClusterService(Settings.builder().put("cluster.name", "ClusterServiceTests").build(),
                 new ClusterSettings(Settings.EMPTY, ClusterSettings.BUILT_IN_CLUSTER_SETTINGS),
                 threadPool);
-        clusterService.setLocalNode(new DiscoveryNode("node", DummyTransportAddress.INSTANCE, Collections.emptyMap(),
-                new HashSet<>(Arrays.asList(DiscoveryNode.Role.values())),Version.CURRENT));
+        clusterService.setLocalNode(localNode);
         clusterService.setNodeConnectionsService(new NodeConnectionsService(Settings.EMPTY, null, null) {
             @Override
-            public void connectToAddedNodes(ClusterChangedEvent event) {
+            public void connectToNodes(List<DiscoveryNode> addedNodes) {
                 // skip
             }
 
             @Override
-            public void disconnectFromRemovedNodes(ClusterChangedEvent event) {
+            public void disconnectFromNodes(List<DiscoveryNode> removedNodes) {
                 // skip
             }
         });
@@ -98,8 +102,8 @@ public class ClusterServiceUtils {
             }
 
             @Override
-            public void onFailure(String source, Throwable t) {
-                fail("unexpected exception" + t);
+            public void onFailure(String source, Exception e) {
+                fail("unexpected exception" + e);
             }
         });
         try {

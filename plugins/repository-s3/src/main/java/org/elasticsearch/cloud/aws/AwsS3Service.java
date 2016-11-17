@@ -24,14 +24,12 @@ import com.amazonaws.services.s3.AmazonS3;
 import org.elasticsearch.common.component.LifecycleComponent;
 import org.elasticsearch.common.settings.Setting;
 import org.elasticsearch.common.settings.Setting.Property;
+import org.elasticsearch.common.settings.Settings;
 
 import java.util.Locale;
 import java.util.function.Function;
 
-/**
- *
- */
-public interface AwsS3Service extends LifecycleComponent<AwsS3Service> {
+public interface AwsS3Service extends LifecycleComponent {
 
     // Global AWS settings (shared between discovery-ec2 and repository-s3)
     // Each setting starting with `cloud.aws` also exists in discovery-ec2 project. Don't forget to update
@@ -154,6 +152,6 @@ public interface AwsS3Service extends LifecycleComponent<AwsS3Service> {
         Setting<String> ENDPOINT_SETTING = Setting.simpleString("cloud.aws.s3.endpoint", Property.NodeScope);
     }
 
-    AmazonS3 client(String endpoint, Protocol protocol, String region, String account, String key, Integer maxRetries,
-                    boolean useThrottleRetries);
+    AmazonS3 client(Settings repositorySettings, String endpoint, Protocol protocol, String region, Integer maxRetries,
+                    boolean useThrottleRetries, Boolean pathStyleAccess);
 }

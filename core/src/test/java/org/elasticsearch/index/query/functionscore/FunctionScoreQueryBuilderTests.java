@@ -25,7 +25,6 @@ import org.apache.lucene.index.Term;
 import org.apache.lucene.search.MatchAllDocsQuery;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.TermQuery;
-import org.elasticsearch.common.ParseField;
 import org.elasticsearch.common.ParseFieldMatcher;
 import org.elasticsearch.common.ParsingException;
 import org.elasticsearch.common.geo.GeoPoint;
@@ -37,34 +36,36 @@ import org.elasticsearch.common.lucene.search.function.FunctionScoreQuery;
 import org.elasticsearch.common.lucene.search.function.WeightFactorFunction;
 import org.elasticsearch.common.unit.DistanceUnit;
 import org.elasticsearch.common.xcontent.XContentType;
-import org.elasticsearch.index.mapper.MapperService;
 import org.elasticsearch.index.query.AbstractQueryBuilder;
-import org.elasticsearch.plugins.Plugin;
-import org.elasticsearch.search.SearchModule;
-import org.elasticsearch.test.AbstractQueryTestCase;
 import org.elasticsearch.index.query.MatchAllQueryBuilder;
 import org.elasticsearch.index.query.QueryBuilder;
 import org.elasticsearch.index.query.QueryParseContext;
-import org.elasticsearch.index.query.QueryShardContext;
 import org.elasticsearch.index.query.RandomQueryBuilder;
 import org.elasticsearch.index.query.TermQueryBuilder;
 import org.elasticsearch.index.query.WrapperQueryBuilder;
 import org.elasticsearch.index.query.functionscore.FunctionScoreQueryBuilder.FilterFunctionBuilder;
+import org.elasticsearch.plugins.Plugin;
+import org.elasticsearch.plugins.SearchPlugin;
 import org.elasticsearch.script.MockScriptEngine;
 import org.elasticsearch.script.Script;
-import org.elasticsearch.script.ScriptService;
+import org.elasticsearch.script.ScriptType;
 import org.elasticsearch.search.MultiValueMode;
+import org.elasticsearch.search.internal.SearchContext;
+import org.elasticsearch.test.AbstractQueryTestCase;
 import org.hamcrest.Matcher;
 import org.joda.time.DateTime;
 import org.joda.time.DateTimeZone;
-import org.junit.Before;
-import org.junit.BeforeClass;
 
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
+import static java.util.Collections.singletonList;
 import static org.elasticsearch.common.xcontent.XContentFactory.jsonBuilder;
 import static org.elasticsearch.index.query.QueryBuilders.functionScoreQuery;
 import static org.elasticsearch.index.query.QueryBuilders.matchAllQuery;
@@ -102,6 +103,14 @@ public class FunctionScoreQueryBuilderTests extends AbstractQueryTestCase<Functi
             functionScoreQueryBuilder.setMinScore(randomFloat());
         }
         return functionScoreQueryBuilder;
+    }
+
+    @Override
+    protected Set<String> getObjectsHoldingArbitraryContent() {
+        //script_score.script.params can contain arbitrary parameters. no error is expected when adding additional objects
+        //within the params object. Score functions get parsed in the data nodes, so they are not validated in the coord node.
+        return new HashSet<>(Arrays.asList(Script.PARAMS_PARSE_FIELD.getPreferredName(), ExponentialDecayFunctionBuilder.NAME,
+                LinearDecayFunctionBuilder.NAME, GaussDecayFunctionBuilder.NAME));
     }
 
     /**
@@ -157,19 +166,21 @@ public class FunctionScoreQueryBuilderTests extends AbstractQueryTestCase<Functi
             functionBuilder = fieldValueFactorFunctionBuilder;
             break;
         case 2:
-            String script = "5";
+            String script = "1";
             Map<String, Object> params = Collections.emptyMap();
             functionBuilder = new ScriptScoreFunctionBuilder(
-                    new Script(script, ScriptService.ScriptType.INLINE, MockScriptEngine.NAME, params));
+                    new Script(ScriptType.INLINE, MockScriptEngine.NAME, script, params));
             break;
         case 3:
             RandomScoreFunctionBuilder randomScoreFunctionBuilder = new RandomScoreFunctionBuilderWithFixedSeed();
-            if (randomBoolean()) {
-                randomScoreFunctionBuilder.seed(randomLong());
-            } else if (randomBoolean()) {
-                randomScoreFunctionBuilder.seed(randomInt());
-            } else {
-                randomScoreFunctionBuilder.seed(randomAsciiOfLengthBetween(1, 10));
+            if (randomBoolean()) { // sometimes provide no seed
+                if (randomBoolean()) {
+                    randomScoreFunctionBuilder.seed(randomLong());
+                } else if (randomBoolean()) {
+                    randomScoreFunctionBuilder.seed(randomInt());
+                } else {
+                    randomScoreFunctionBuilder.seed(randomAsciiOfLengthBetween(1, 10));
+                }
             }
             functionBuilder = randomScoreFunctionBuilder;
             break;
@@ -230,7 +241,7 @@ public class FunctionScoreQueryBuilderTests extends AbstractQueryTestCase<Functi
     }
 
     @Override
-    protected void doAssertLuceneQuery(FunctionScoreQueryBuilder queryBuilder, Query query, QueryShardContext context) throws IOException {
+    protected void doAssertLuceneQuery(FunctionScoreQueryBuilder queryBuilder, Query query, SearchContext context) throws IOException {
         assertThat(query, either(instanceOf(FunctionScoreQuery.class)).or(instanceOf(FiltersFunctionScoreQuery.class)));
     }
 
@@ -416,12 +427,8 @@ public class FunctionScoreQueryBuilderTests extends AbstractQueryTestCase<Functi
             "      \"weight\": 2\n" +
             "    }\n" +
             "}";
-        try {
-            parseQuery(functionScoreQuery);
-            fail("parsing should have failed");
-        } catch (ParsingException e) {
-            assertThat(e.getMessage(), containsString("use [functions] array if you want to define several functions."));
-        }
+        ParsingException e = expectThrows(ParsingException.class, () -> parseQuery(functionScoreQuery));
+        assertThat(e.getMessage(), containsString("use [functions] array if you want to define several functions."));
     }
 
     public void testProperErrorMessageWhenTwoFunctionsDefinedInFunctionsArray() throws IOException {
@@ -583,13 +590,13 @@ public class FunctionScoreQueryBuilderTests extends AbstractQueryTestCase<Functi
         String json =
             "{\n" +
                 "  \"function_score\" : {\n" +
-                "    \"query\" : { },\n" +
+                "    \"query\" : { \"match_all\" : {} },\n" +
                 "    \"functions\" : [ {\n" +
-                "      \"filter\" : { },\n" +
+                "      \"filter\" : { \"match_all\" : {}},\n" +
                 "      \"weight\" : 23.0,\n" +
                 "      \"random_score\" : { }\n" +
                 "    }, {\n" +
-                "      \"filter\" : { },\n" +
+                "      \"filter\" : { \"match_all\" : {}},\n" +
                 "      \"weight\" : 5.0\n" +
                 "    } ],\n" +
                 "    \"score_mode\" : \"multiply\",\n" +
@@ -607,11 +614,11 @@ public class FunctionScoreQueryBuilderTests extends AbstractQueryTestCase<Functi
                     "  \"function_score\" : {\n" +
                     "    \"query\" : { \"match_all\" : {} },\n" +
                     "    \"functions\" : [ {\n" +
-                    "      \"filter\" : { },\n" +
+                    "      \"filter\" : { \"match_all\" : {}},\n" +
                     "      \"weight\" : 23.0,\n" +
                     "      \"random_score\" : { }\n" +
                     "    }, {\n" +
-                    "      \"filter\" : { },\n" +
+                    "      \"filter\" : { \"match_all\" : {}},\n" +
                     "      \"weight\" : 5.0\n" +
                     "    } ],\n" +
                     "    \"score_mode\" : \"multiply\",\n" +
@@ -696,7 +703,7 @@ public class FunctionScoreQueryBuilderTests extends AbstractQueryTestCase<Functi
         expectParsingException(json, "field [not_supported] is not supported");
     }
 
-    public void testMalformedQuery() throws IOException {
+    public void testMalformedQueryMultipleQueryObjects() throws IOException {
         //verify that an error is thrown rather than setting the query twice (https://github.com/elastic/elasticsearch/issues/16583)
         String json = "{\n" +
                 "    \"function_score\":{\n" +
@@ -711,15 +718,34 @@ public class FunctionScoreQueryBuilderTests extends AbstractQueryTestCase<Functi
                 "        }\n" +
                 "    }\n" +
                 "}";
+        expectParsingException(json, equalTo("[bool] malformed query, expected [END_OBJECT] but found [FIELD_NAME]"));
+    }
+
+    public void testMalformedQueryMultipleQueryElements() throws IOException {
+        String json = "{\n" +
+                "    \"function_score\":{\n" +
+                "        \"query\":{\n" +
+                "            \"bool\":{\n" +
+                "                \"must\":{\"match\":{\"field\":\"value\"}}" +
+                "             }\n" +
+                "            },\n" +
+                "        \"query\":{\n" +
+                "            \"bool\":{\n" +
+                "                \"must\":{\"match\":{\"field\":\"value\"}}" +
+                "             }\n" +
+                "            }\n" +
+                "        }\n" +
+                "    }\n" +
+                "}";
         expectParsingException(json, "[query] is already defined.");
     }
 
-    private void expectParsingException(String json, Matcher<String> messageMatcher) {
+    private static void expectParsingException(String json, Matcher<String> messageMatcher) {
         ParsingException e = expectThrows(ParsingException.class, () -> parseQuery(json));
         assertThat(e.getMessage(), messageMatcher);
     }
 
-    private void expectParsingException(String json, String message) {
+    private static void expectParsingException(String json, String message) {
         expectParsingException(json, equalTo("failed to parse [function_score] query. " + message));
     }
 
@@ -728,7 +754,6 @@ public class FunctionScoreQueryBuilderTests extends AbstractQueryTestCase<Functi
      */
     static class RandomScoreFunctionBuilderWithFixedSeed extends RandomScoreFunctionBuilder {
         public static final String NAME = "random_with_fixed_seed";
-        public static final ParseField FUNCTION_NAME_FIELD = new ParseField(NAME);
 
         public RandomScoreFunctionBuilderWithFixedSeed() {
         }
@@ -741,12 +766,6 @@ public class FunctionScoreQueryBuilderTests extends AbstractQueryTestCase<Functi
         }
 
         @Override
-        int getCurrentShardId() {
-            // We can't use the method that normal queries use during this test so we hack something instead
-            return 0;
-        }
-
-        @Override
         public String getName() {
             return NAME;
         }
@@ -755,16 +774,32 @@ public class FunctionScoreQueryBuilderTests extends AbstractQueryTestCase<Functi
                 throws IOException, ParsingException {
             RandomScoreFunctionBuilder builder = RandomScoreFunctionBuilder.fromXContent(parseContext);
             RandomScoreFunctionBuilderWithFixedSeed replacement = new RandomScoreFunctionBuilderWithFixedSeed();
-            replacement.seed(builder.getSeed());
+            if (builder.getSeed() != null) {
+                replacement.seed(builder.getSeed());
+            }
             return replacement;
         }
     }
 
-    public static class TestPlugin extends Plugin {
-        public void onModule(SearchModule module) {
-            module.registerScoreFunction(RandomScoreFunctionBuilderWithFixedSeed::new,
-                    RandomScoreFunctionBuilderWithFixedSeed::fromXContent, RandomScoreFunctionBuilderWithFixedSeed.FUNCTION_NAME_FIELD);
+    public static class TestPlugin extends Plugin implements SearchPlugin {
+        @Override
+        public List<ScoreFunctionSpec<?>> getScoreFunctions() {
+            return singletonList(new ScoreFunctionSpec<>(RandomScoreFunctionBuilderWithFixedSeed.NAME,
+                    RandomScoreFunctionBuilderWithFixedSeed::new, RandomScoreFunctionBuilderWithFixedSeed::fromXContent));
         }
+    }
 
+    @Override
+    protected boolean isCachable(FunctionScoreQueryBuilder queryBuilder) {
+        FilterFunctionBuilder[] filterFunctionBuilders = queryBuilder.filterFunctionBuilders();
+        for (FilterFunctionBuilder builder : filterFunctionBuilders) {
+            if (builder.getScoreFunction() instanceof ScriptScoreFunctionBuilder) {
+                return false;
+            } else if (builder.getScoreFunction() instanceof RandomScoreFunctionBuilder
+                && ((RandomScoreFunctionBuilder) builder.getScoreFunction()).getSeed() == null) {
+                return false;
+            }
+        }
+        return true;
     }
 }

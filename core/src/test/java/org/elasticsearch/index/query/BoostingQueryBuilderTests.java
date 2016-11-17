@@ -24,14 +24,15 @@ import org.apache.lucene.search.Query;
 import org.elasticsearch.common.ParseFieldMatcher;
 import org.elasticsearch.common.xcontent.XContentFactory;
 import org.elasticsearch.common.xcontent.XContentParser;
+import org.elasticsearch.search.internal.SearchContext;
 import org.elasticsearch.test.AbstractQueryTestCase;
 
 import java.io.IOException;
 import java.util.Optional;
 
+import static org.hamcrest.CoreMatchers.equalTo;
 import static org.hamcrest.CoreMatchers.instanceOf;
-import static org.hamcrest.CoreMatchers.nullValue;
-import static org.hamcrest.CoreMatchers.startsWith;;
+import static org.hamcrest.CoreMatchers.nullValue;;
 
 public class BoostingQueryBuilderTests extends AbstractQueryTestCase<BoostingQueryBuilder> {
 
@@ -43,9 +44,9 @@ public class BoostingQueryBuilderTests extends AbstractQueryTestCase<BoostingQue
     }
 
     @Override
-    protected void doAssertLuceneQuery(BoostingQueryBuilder queryBuilder, Query query, QueryShardContext context) throws IOException {
-        Query positive = queryBuilder.positiveQuery().toQuery(context);
-        Query negative = queryBuilder.negativeQuery().toQuery(context);
+    protected void doAssertLuceneQuery(BoostingQueryBuilder queryBuilder, Query query, SearchContext context) throws IOException {
+        Query positive = queryBuilder.positiveQuery().toQuery(context.getQueryShardContext());
+        Query negative = queryBuilder.negativeQuery().toQuery(context.getQueryShardContext());
         if (positive == null || negative == null) {
             assertThat(query, nullValue());
         } else {
@@ -54,26 +55,10 @@ public class BoostingQueryBuilderTests extends AbstractQueryTestCase<BoostingQue
     }
 
     public void testIllegalArguments() {
-        try {
-            new BoostingQueryBuilder(null, new MatchAllQueryBuilder());
-            fail("must not be null");
-        } catch (IllegalArgumentException e) {
-            //
-        }
-
-        try {
-            new BoostingQueryBuilder(new MatchAllQueryBuilder(), null);
-            fail("must not be null");
-        } catch (IllegalArgumentException e) {
-            //
-        }
-
-        try {
-            new BoostingQueryBuilder(new MatchAllQueryBuilder(), new MatchAllQueryBuilder()).negativeBoost(-1.0f);
-            fail("must not be negative");
-        } catch (IllegalArgumentException e) {
-            //
-        }
+        expectThrows(IllegalArgumentException.class, () -> new BoostingQueryBuilder(null, new MatchAllQueryBuilder()));
+        expectThrows(IllegalArgumentException.class, () -> new BoostingQueryBuilder(new MatchAllQueryBuilder(), null));
+        expectThrows(IllegalArgumentException.class,
+                () -> new BoostingQueryBuilder(new MatchAllQueryBuilder(), new MatchAllQueryBuilder()).negativeBoost(-1.0f));
     }
 
     public void testFromJson() throws IOException {
@@ -103,7 +88,6 @@ public class BoostingQueryBuilderTests extends AbstractQueryTestCase<BoostingQue
 
         BoostingQueryBuilder queryBuilder = (BoostingQueryBuilder) parseQuery(query);
         checkGeneratedJson(query, queryBuilder);
-
         assertEquals(query, 42, queryBuilder.boost(), 0.00001);
         assertEquals(query, 23, queryBuilder.negativeBoost(), 0.00001);
         assertEquals(query, 8, queryBuilder.negativeQuery().boost(), 0.00001);
@@ -126,22 +110,27 @@ public class BoostingQueryBuilderTests extends AbstractQueryTestCase<BoostingQue
         Optional<QueryBuilder> innerQueryBuilder = context.parseInnerQueryBuilder();
         assertTrue(innerQueryBuilder.isPresent() == false);
 
+        checkWarningHeaders("query malformed, empty clause found at [1:36]");
+
         query =
-                "{ \"boosting\" : {" +
-                "    \"positive\" : { \"match_all\" : {} }, " +
-                "    \"negative\" : { }, " +
-                "    \"negative_boost\" : 23.0" +
-                "  }" +
+                "{ \"boosting\" : {\n" +
+                "    \"positive\" : { \"match_all\" : {} },\n" +
+                "    \"negative\" : { },\n" +
+                "    \"negative_boost\" : 23.0\n" +
+                "  }\n" +
                 "}";
         parser = XContentFactory.xContent(query).createParser(query);
         context = createParseContext(parser, ParseFieldMatcher.EMPTY);
         innerQueryBuilder = context.parseInnerQueryBuilder();
         assertTrue(innerQueryBuilder.isPresent() == false);
 
+        checkWarningHeaders("query malformed, empty clause found at [3:20]");
+
         parser = XContentFactory.xContent(query).createParser(query);
         QueryParseContext otherContext = createParseContext(parser, ParseFieldMatcher.STRICT);
         IllegalArgumentException ex = expectThrows(IllegalArgumentException.class, () -> otherContext.parseInnerQueryBuilder());
-        assertThat(ex.getMessage(), startsWith("query malformed, empty clause found at"));
+        assertThat(ex.getMessage(), equalTo("query malformed, empty clause found at [3:20]"));
+        checkWarningHeaders("query malformed, empty clause found at [3:20]");
     }
 
     public void testRewrite() throws IOException {

@@ -39,7 +39,7 @@ import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentFactory;
 import org.elasticsearch.common.xcontent.XContentType;
 import org.elasticsearch.rest.RestRequest;
-import org.elasticsearch.rest.action.admin.cluster.reroute.RestClusterRerouteAction;
+import org.elasticsearch.rest.action.admin.cluster.RestClusterRerouteAction;
 import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.test.rest.FakeRestRequest;
 
@@ -50,7 +50,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
 
-import static java.util.Collections.emptyMap;
 import static java.util.Collections.unmodifiableList;
 import static org.elasticsearch.common.unit.TimeValue.timeValueMillis;
 
@@ -59,7 +58,8 @@ import static org.elasticsearch.common.unit.TimeValue.timeValueMillis;
  */
 public class ClusterRerouteRequestTests extends ESTestCase {
     private static final int ROUNDS = 30;
-    private final List<Supplier<AllocationCommand>> RANDOM_COMMAND_GENERATORS = unmodifiableList(Arrays.asList(
+    private final List<Supplier<AllocationCommand>> RANDOM_COMMAND_GENERATORS = unmodifiableList(
+            Arrays.<Supplier<AllocationCommand>> asList(
             () -> new AllocateReplicaAllocationCommand(randomAsciiOfLengthBetween(2, 10), between(0, 1000),
                     randomAsciiOfLengthBetween(2, 10)),
             () -> new AllocateEmptyPrimaryAllocationCommand(randomAsciiOfLengthBetween(2, 10), between(0, 1000),
@@ -74,8 +74,8 @@ public class ClusterRerouteRequestTests extends ESTestCase {
     private final AllocationCommandRegistry allocationCommandRegistry;
 
     public ClusterRerouteRequestTests() {
-        namedWriteableRegistry = new NamedWriteableRegistry();
-        allocationCommandRegistry = new NetworkModule(null, null, true, namedWriteableRegistry).getAllocationCommandRegistry();
+        allocationCommandRegistry = NetworkModule.getAllocationCommandRegistry();
+        namedWriteableRegistry = new NamedWriteableRegistry(NetworkModule.getNamedWriteables());
     }
 
     private ClusterRerouteRequest randomRequest() {
@@ -166,7 +166,7 @@ public class ClusterRerouteRequestTests extends ESTestCase {
     private ClusterRerouteRequest roundTripThroughBytes(ClusterRerouteRequest original) throws IOException {
         try (BytesStreamOutput output = new BytesStreamOutput()) {
             original.writeTo(output);
-            try (StreamInput in = new NamedWriteableAwareStreamInput(StreamInput.wrap(output.bytes()), namedWriteableRegistry)) {
+            try (StreamInput in = new NamedWriteableAwareStreamInput(output.bytes().streamInput(), namedWriteableRegistry)) {
                 ClusterRerouteRequest copy = new ClusterRerouteRequest();
                 copy.readFrom(in);
                 return copy;

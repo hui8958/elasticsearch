@@ -23,6 +23,7 @@ import org.elasticsearch.action.ActionRequestValidationException;
 import org.elasticsearch.action.IndicesRequest;
 import org.elasticsearch.action.search.SearchRequest;
 import org.elasticsearch.action.support.IndicesOptions;
+import org.elasticsearch.tasks.TaskId;
 
 import static org.elasticsearch.action.ValidateActions.addValidationError;
 
@@ -43,15 +44,21 @@ import static org.elasticsearch.action.ValidateActions.addValidationError;
  *     <li>it's results won't be visible until the index is refreshed.</li>
  * </ul>
  */
-public class DeleteByQueryRequest extends AbstractBulkByScrollRequest<DeleteByQueryRequest> implements IndicesRequest {
+public class DeleteByQueryRequest extends AbstractBulkByScrollRequest<DeleteByQueryRequest> implements IndicesRequest.Replaceable {
 
     public DeleteByQueryRequest() {
     }
 
     public DeleteByQueryRequest(SearchRequest search) {
-        super(search);
+        this(search, true);
+    }
+
+    private DeleteByQueryRequest(SearchRequest search, boolean setDefaults) {
+        super(search, setDefaults);
         // Delete-By-Query does not require the source
-        search.source().fetchSource(false);
+        if (setDefaults) {
+            search.source().fetchSource(false);
+        }
     }
 
     @Override
@@ -72,11 +79,25 @@ public class DeleteByQueryRequest extends AbstractBulkByScrollRequest<DeleteByQu
     }
 
     @Override
+    DeleteByQueryRequest forSlice(TaskId slicingTask, SearchRequest slice) {
+        return doForSlice(new DeleteByQueryRequest(slice, false), slicingTask);
+    }
+
+    @Override
     public String toString() {
         StringBuilder b = new StringBuilder();
         b.append("delete-by-query ");
         searchToString(b);
         return b.toString();
+    }
+
+    //delete by query deletes all documents that match a query. The indices and indices options that affect how
+    //indices are resolved depend entirely on the inner search request. That's why the following methods delegate to it.
+    @Override
+    public IndicesRequest indices(String... indices) {
+        assert getSearchRequest() != null;
+        getSearchRequest().indices(indices);
+        return this;
     }
 
     @Override

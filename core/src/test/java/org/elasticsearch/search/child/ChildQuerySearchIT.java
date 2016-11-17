@@ -32,17 +32,26 @@ import org.elasticsearch.common.lucene.search.function.FiltersFunctionScoreQuery
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.index.IndexModule;
+import org.elasticsearch.index.query.BoolQueryBuilder;
 import org.elasticsearch.index.query.HasChildQueryBuilder;
+import org.elasticsearch.index.query.HasParentQueryBuilder;
 import org.elasticsearch.index.query.IdsQueryBuilder;
+import org.elasticsearch.index.query.InnerHitBuilder;
+import org.elasticsearch.index.query.MatchAllQueryBuilder;
+import org.elasticsearch.index.query.MatchQueryBuilder;
 import org.elasticsearch.index.query.QueryBuilder;
 import org.elasticsearch.index.query.QueryBuilders;
 import org.elasticsearch.index.query.functionscore.FunctionScoreQueryBuilder;
 import org.elasticsearch.rest.RestStatus;
+import org.elasticsearch.search.SearchHit;
 import org.elasticsearch.search.aggregations.AggregationBuilders;
 import org.elasticsearch.search.aggregations.bucket.filter.Filter;
 import org.elasticsearch.search.aggregations.bucket.global.Global;
 import org.elasticsearch.search.aggregations.bucket.terms.Terms;
 import org.elasticsearch.search.builder.SearchSourceBuilder;
+import org.elasticsearch.search.fetch.subphase.highlight.HighlightBuilder;
+import org.elasticsearch.search.fetch.subphase.highlight.HighlightBuilder.Field;
+import org.elasticsearch.search.fetch.subphase.highlight.HighlightField;
 import org.elasticsearch.search.sort.SortBuilders;
 import org.elasticsearch.search.sort.SortOrder;
 import org.elasticsearch.test.ESIntegTestCase;
@@ -62,8 +71,8 @@ import java.util.Set;
 import static org.elasticsearch.common.xcontent.XContentFactory.jsonBuilder;
 import static org.elasticsearch.index.query.QueryBuilders.boolQuery;
 import static org.elasticsearch.index.query.QueryBuilders.constantScoreQuery;
-import static org.elasticsearch.index.query.QueryBuilders.hasParentQuery;
 import static org.elasticsearch.index.query.QueryBuilders.hasChildQuery;
+import static org.elasticsearch.index.query.QueryBuilders.hasParentQuery;
 import static org.elasticsearch.index.query.QueryBuilders.idsQuery;
 import static org.elasticsearch.index.query.QueryBuilders.matchAllQuery;
 import static org.elasticsearch.index.query.QueryBuilders.matchQuery;
@@ -202,7 +211,7 @@ public class ChildQuerySearchIT extends ESIntegTestCase {
         refresh();
 
         // TEST FETCHING _parent from child
-        SearchResponse searchResponse = client().prepareSearch("test").setQuery(idsQuery("child").addIds("c1")).fields("_parent").execute()
+        SearchResponse searchResponse = client().prepareSearch("test").setQuery(idsQuery("child").addIds("c1")).storedFields("_parent").execute()
                 .actionGet();
         assertNoFailures(searchResponse);
         assertThat(searchResponse.getHits().totalHits(), equalTo(1L));
@@ -210,7 +219,7 @@ public class ChildQuerySearchIT extends ESIntegTestCase {
         assertThat(searchResponse.getHits().getAt(0).field("_parent").value().toString(), equalTo("p1"));
 
         // TEST matching on parent
-        searchResponse = client().prepareSearch("test").setQuery(termQuery("_parent#parent", "p1")).fields("_parent").get();
+        searchResponse = client().prepareSearch("test").setQuery(termQuery("_parent#parent", "p1")).storedFields("_parent").get();
         assertNoFailures(searchResponse);
         assertThat(searchResponse.getHits().totalHits(), equalTo(2L));
         assertThat(searchResponse.getHits().getAt(0).id(), anyOf(equalTo("c1"), equalTo("c2")));
@@ -218,7 +227,7 @@ public class ChildQuerySearchIT extends ESIntegTestCase {
         assertThat(searchResponse.getHits().getAt(1).id(), anyOf(equalTo("c1"), equalTo("c2")));
         assertThat(searchResponse.getHits().getAt(1).field("_parent").value().toString(), equalTo("p1"));
 
-        searchResponse = client().prepareSearch("test").setQuery(queryStringQuery("_parent#parent:p1")).fields("_parent").get();
+        searchResponse = client().prepareSearch("test").setQuery(queryStringQuery("_parent#parent:p1")).storedFields("_parent").get();
         assertNoFailures(searchResponse);
         assertThat(searchResponse.getHits().totalHits(), equalTo(2L));
         assertThat(searchResponse.getHits().getAt(0).id(), anyOf(equalTo("c1"), equalTo("c2")));
@@ -324,7 +333,7 @@ public class ChildQuerySearchIT extends ESIntegTestCase {
             builders.add(client().prepareIndex("test", "child", childId).setSource("c_field", childId).setParent(previousParentId));
 
             if (!parentToChildren.containsKey(previousParentId)) {
-                parentToChildren.put(previousParentId, new HashSet<String>());
+                parentToChildren.put(previousParentId, new HashSet<>());
             }
             assertThat(parentToChildren.get(previousParentId).add(childId), is(true));
         }
@@ -805,6 +814,30 @@ public class ChildQuerySearchIT extends ESIntegTestCase {
         assertThat(searchResponse.getHits().hits()[0].id(), equalTo("2"));
     }
 
+    public void testHasChildInnerHitsHighlighting() throws Exception {
+        assertAcked(prepareCreate("test")
+                .addMapping("parent")
+                .addMapping("child", "_parent", "type=parent"));
+        ensureGreen();
+
+        client().prepareIndex("test", "parent", "1").setSource("p_field", 1).get();
+        client().prepareIndex("test", "child", "2").setParent("1").setSource("c_field", "foo bar").get();
+        client().admin().indices().prepareFlush("test").get();
+
+        SearchResponse searchResponse = client().prepareSearch("test").setQuery(
+                hasChildQuery("child", matchQuery("c_field", "foo"), ScoreMode.None)
+                    .innerHit(new InnerHitBuilder().setHighlightBuilder(
+                        new HighlightBuilder().field(new Field("c_field").highlightQuery(QueryBuilders.matchQuery("c_field", "bar"))))))
+                .get();
+        assertNoFailures(searchResponse);
+        assertThat(searchResponse.getHits().totalHits(), equalTo(1L));
+        assertThat(searchResponse.getHits().hits()[0].id(), equalTo("1"));
+        SearchHit[] searchHits = searchResponse.getHits().hits()[0].getInnerHits().get("child").hits();
+        assertThat(searchHits.length, equalTo(1));
+        assertThat(searchHits[0].getHighlightFields().get("c_field").getFragments().length, equalTo(1));
+        assertThat(searchHits[0].getHighlightFields().get("c_field").getFragments()[0].string(), equalTo("foo <em>bar</em>"));
+    }
+
     public void testHasChildAndHasParentWrappedInAQueryFilter() throws Exception {
         assertAcked(prepareCreate("test")
                 .addMapping("parent")
@@ -1115,7 +1148,7 @@ public class ChildQuerySearchIT extends ESIntegTestCase {
                                         hasChildQuery(
                                                 "child_type_one",
                                                 boolQuery().must(
-                                                        queryStringQuery("name:William*").analyzeWildcard(true)
+                                                        queryStringQuery("name:William*")
                                                 ),
                                                 ScoreMode.None)
                                 ),
@@ -1132,7 +1165,7 @@ public class ChildQuerySearchIT extends ESIntegTestCase {
                                         hasChildQuery(
                                                 "child_type_two",
                                                 boolQuery().must(
-                                                        queryStringQuery("name:William*").analyzeWildcard(true)
+                                                        queryStringQuery("name:William*")
                                                 ),
                                                 ScoreMode.None)
                                 ),
@@ -1394,7 +1427,7 @@ public class ChildQuerySearchIT extends ESIntegTestCase {
             SearchResponse scrollResponse = client().prepareSearch("test")
                     .setScroll(TimeValue.timeValueSeconds(30))
                     .setSize(1)
-                    .addField("_id")
+                    .addStoredField("_id")
                     .setQuery(query)
                     .execute()
                     .actionGet();
@@ -1889,4 +1922,43 @@ public class ChildQuerySearchIT extends ESIntegTestCase {
                 QueryBuilders.hasChildQuery("child-type", new IdsQueryBuilder().addIds("child-id"), ScoreMode.None)).get();
         assertSearchHits(searchResponse, "parent-id");
     }
+
+    public void testHighlightersIgnoreParentChild() {
+        assertAcked(prepareCreate("test")
+                .addMapping("parent-type", "searchText", "type=text,term_vector=with_positions_offsets,index_options=offsets")
+                .addMapping("child-type", "_parent", "type=parent-type", "searchText",
+                        "type=text,term_vector=with_positions_offsets,index_options=offsets"));
+        client().prepareIndex("test", "parent-type", "parent-id").setSource("searchText", "quick brown fox").get();
+        client().prepareIndex("test", "child-type", "child-id").setParent("parent-id").setSource("searchText", "quick brown fox").get();
+        refresh();
+
+        String[] highlightTypes = new String[] {"plain", "fvh", "postings"};
+        for (String highlightType : highlightTypes) {
+            logger.info("Testing with highlight type [{}]", highlightType);
+            SearchResponse searchResponse = client().prepareSearch("test")
+                    .setQuery(new BoolQueryBuilder()
+                            .must(new MatchQueryBuilder("searchText", "fox"))
+                            .must(new HasChildQueryBuilder("child-type", new MatchAllQueryBuilder(), ScoreMode.None))
+                    )
+                    .highlighter(new HighlightBuilder().field(new HighlightBuilder.Field("searchText").highlighterType(highlightType)))
+                    .get();
+            assertHitCount(searchResponse, 1);
+            assertThat(searchResponse.getHits().getAt(0).id(), equalTo("parent-id"));
+            HighlightField highlightField = searchResponse.getHits().getAt(0).getHighlightFields().get("searchText");
+            assertThat(highlightField.getFragments()[0].string(), equalTo("quick brown <em>fox</em>"));
+
+            searchResponse = client().prepareSearch("test")
+                    .setQuery(new BoolQueryBuilder()
+                            .must(new MatchQueryBuilder("searchText", "fox"))
+                            .must(new HasParentQueryBuilder("parent-type", new MatchAllQueryBuilder(), false))
+                    )
+                    .highlighter(new HighlightBuilder().field(new HighlightBuilder.Field("searchText").highlighterType(highlightType)))
+                    .get();
+            assertHitCount(searchResponse, 1);
+            assertThat(searchResponse.getHits().getAt(0).id(), equalTo("child-id"));
+            highlightField = searchResponse.getHits().getAt(0).getHighlightFields().get("searchText");
+            assertThat(highlightField.getFragments()[0].string(), equalTo("quick brown <em>fox</em>"));
+        }
+    }
+
 }

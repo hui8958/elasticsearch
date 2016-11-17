@@ -19,6 +19,7 @@
 
 package org.elasticsearch.action.support.master;
 
+import org.apache.logging.log4j.message.ParameterizedMessage;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.ActionListenerResponseHandler;
 import org.elasticsearch.action.ActionResponse;
@@ -33,6 +34,7 @@ import org.elasticsearch.cluster.block.ClusterBlockException;
 import org.elasticsearch.cluster.metadata.IndexNameExpressionResolver;
 import org.elasticsearch.cluster.node.DiscoveryNodes;
 import org.elasticsearch.cluster.service.ClusterService;
+import org.elasticsearch.cluster.service.ClusterServiceState;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.discovery.Discovery;
@@ -111,8 +113,8 @@ public abstract class TransportMasterNodeAction<Request extends MasterNodeReques
 
         private final ClusterStateObserver.ChangePredicate retryableOrNoBlockPredicate = new ClusterStateObserver.ValidationPredicate() {
             @Override
-            protected boolean validate(ClusterState newState) {
-                ClusterBlockException blockException = checkBlock(request, newState);
+            protected boolean validate(ClusterServiceState newState) {
+                ClusterBlockException blockException = checkBlock(request, newState.getClusterState());
                 return (blockException == null || !blockException.retryable());
             }
         };
@@ -132,7 +134,7 @@ public abstract class TransportMasterNodeAction<Request extends MasterNodeReques
         }
 
         protected void doStart() {
-            final ClusterState clusterState = observer.observedState();
+            final ClusterState clusterState = observer.observedState().getClusterState();
             final DiscoveryNodes nodes = clusterState.nodes();
             if (nodes.isLocalNodeElectedMaster() || localExecute(request)) {
                 // check for block, if blocked, retry, else, execute locally
@@ -152,10 +154,10 @@ public abstract class TransportMasterNodeAction<Request extends MasterNodeReques
                         }
 
                         @Override
-                        public void onFailure(Throwable t) {
+                        public void onFailure(Exception t) {
                             if (t instanceof Discovery.FailedToCommitClusterStateException
                                     || (t instanceof NotMasterException)) {
-                                logger.debug("master could not publish cluster state or stepped down before publishing action [{}], scheduling a retry", t, actionName);
+                                logger.debug((org.apache.logging.log4j.util.Supplier<?>) () -> new ParameterizedMessage("master could not publish cluster state or stepped down before publishing action [{}], scheduling a retry", actionName), t);
                                 retry(t, MasterNodeChangePredicate.INSTANCE);
                             } else {
                                 listener.onFailure(t);
@@ -209,7 +211,7 @@ public abstract class TransportMasterNodeAction<Request extends MasterNodeReques
 
                     @Override
                     public void onTimeout(TimeValue timeout) {
-                        logger.debug("timed out while retrying [{}] after failure (timeout [{}])", failure, actionName, timeout);
+                        logger.debug((org.apache.logging.log4j.util.Supplier<?>) () -> new ParameterizedMessage("timed out while retrying [{}] after failure (timeout [{}])", actionName, timeout), failure);
                         listener.onFailure(new MasterNotDiscoveredException(failure));
                     }
                 }, changePredicate

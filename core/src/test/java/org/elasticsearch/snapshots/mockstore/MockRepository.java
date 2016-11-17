@@ -19,29 +19,6 @@
 
 package org.elasticsearch.snapshots.mockstore;
 
-import org.elasticsearch.ElasticsearchException;
-import org.elasticsearch.cluster.metadata.MetaData;
-import org.elasticsearch.snapshots.SnapshotId;
-import org.elasticsearch.cluster.service.ClusterService;
-import org.elasticsearch.common.blobstore.BlobContainer;
-import org.elasticsearch.common.blobstore.BlobMetaData;
-import org.elasticsearch.common.blobstore.BlobPath;
-import org.elasticsearch.common.blobstore.BlobStore;
-import org.elasticsearch.common.bytes.BytesReference;
-import org.elasticsearch.common.inject.Inject;
-import org.elasticsearch.common.io.PathUtils;
-import org.elasticsearch.common.settings.Setting;
-import org.elasticsearch.common.settings.Setting.Property;
-import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.common.settings.SettingsModule;
-import org.elasticsearch.env.Environment;
-import org.elasticsearch.index.snapshots.IndexShardRepository;
-import org.elasticsearch.index.snapshots.blobstore.BlobStoreIndexShardRepository;
-import org.elasticsearch.repositories.RepositoriesModule;
-import org.elasticsearch.repositories.RepositoryName;
-import org.elasticsearch.repositories.RepositorySettings;
-import org.elasticsearch.repositories.fs.FsRepository;
-
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UnsupportedEncodingException;
@@ -49,22 +26,45 @@ import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicLong;
 
+import com.carrotsearch.randomizedtesting.RandomizedContext;
+import org.apache.lucene.index.CorruptIndexException;
+import org.elasticsearch.ElasticsearchException;
+import org.elasticsearch.cluster.metadata.MetaData;
+import org.elasticsearch.cluster.metadata.RepositoryMetaData;
+import org.elasticsearch.common.blobstore.BlobContainer;
+import org.elasticsearch.common.blobstore.BlobMetaData;
+import org.elasticsearch.common.blobstore.BlobPath;
+import org.elasticsearch.common.blobstore.BlobStore;
+import org.elasticsearch.common.io.PathUtils;
+import org.elasticsearch.common.settings.Setting;
+import org.elasticsearch.common.settings.Setting.Property;
+import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.env.Environment;
+import org.elasticsearch.plugins.RepositoryPlugin;
+import org.elasticsearch.repositories.Repository;
+import org.elasticsearch.repositories.IndexId;
+import org.elasticsearch.repositories.fs.FsRepository;
+import org.elasticsearch.snapshots.SnapshotId;
+
 public class MockRepository extends FsRepository {
 
-    public static class Plugin extends org.elasticsearch.plugins.Plugin {
+    public static class Plugin extends org.elasticsearch.plugins.Plugin implements RepositoryPlugin {
 
         public static final Setting<String> USERNAME_SETTING = Setting.simpleString("secret.mock.username", Property.NodeScope);
         public static final Setting<String> PASSWORD_SETTING =
             Setting.simpleString("secret.mock.password", Property.NodeScope, Property.Filtered);
 
-        public void onModule(RepositoriesModule repositoriesModule) {
-            repositoriesModule.registerRepository("mock", MockRepository.class, BlobStoreIndexShardRepository.class);
+
+        @Override
+        public Map<String, Repository.Factory> getRepositories(Environment env) {
+            return Collections.singletonMap("mock", (metadata) -> new MockRepository(metadata, env));
         }
 
         @Override
@@ -83,6 +83,8 @@ public class MockRepository extends FsRepository {
 
     private final double randomDataFileIOExceptionRate;
 
+    private final boolean useLuceneCorruptionException;
+
     private final long maximumNumberOfFailures;
 
     private final long waitAfterUnblock;
@@ -99,43 +101,40 @@ public class MockRepository extends FsRepository {
 
     private volatile boolean blocked = false;
 
-    @Inject
-    public MockRepository(RepositoryName name, RepositorySettings repositorySettings, IndexShardRepository indexShardRepository, ClusterService clusterService, Environment environment) throws IOException {
-        super(name, overrideSettings(repositorySettings, clusterService), indexShardRepository, environment);
-        randomControlIOExceptionRate = repositorySettings.settings().getAsDouble("random_control_io_exception_rate", 0.0);
-        randomDataFileIOExceptionRate = repositorySettings.settings().getAsDouble("random_data_file_io_exception_rate", 0.0);
-        maximumNumberOfFailures = repositorySettings.settings().getAsLong("max_failure_number", 100L);
-        blockOnControlFiles = repositorySettings.settings().getAsBoolean("block_on_control", false);
-        blockOnDataFiles = repositorySettings.settings().getAsBoolean("block_on_data", false);
-        blockOnInitialization = repositorySettings.settings().getAsBoolean("block_on_init", false);
-        randomPrefix = repositorySettings.settings().get("random", "default");
-        waitAfterUnblock = repositorySettings.settings().getAsLong("wait_after_unblock", 0L);
+    public MockRepository(RepositoryMetaData metadata, Environment environment) throws IOException {
+        super(overrideSettings(metadata, environment), environment);
+        randomControlIOExceptionRate = metadata.settings().getAsDouble("random_control_io_exception_rate", 0.0);
+        randomDataFileIOExceptionRate = metadata.settings().getAsDouble("random_data_file_io_exception_rate", 0.0);
+        useLuceneCorruptionException = metadata.settings().getAsBoolean("use_lucene_corruption", false);
+        maximumNumberOfFailures = metadata.settings().getAsLong("max_failure_number", 100L);
+        blockOnControlFiles = metadata.settings().getAsBoolean("block_on_control", false);
+        blockOnDataFiles = metadata.settings().getAsBoolean("block_on_data", false);
+        blockOnInitialization = metadata.settings().getAsBoolean("block_on_init", false);
+        randomPrefix = metadata.settings().get("random", "default");
+        waitAfterUnblock = metadata.settings().getAsLong("wait_after_unblock", 0L);
         logger.info("starting mock repository with random prefix {}", randomPrefix);
         mockBlobStore = new MockBlobStore(super.blobStore());
     }
 
     @Override
-    public void initializeSnapshot(SnapshotId snapshotId, List<String> indices, MetaData metaData) {
-        if (blockOnInitialization ) {
+    public void initializeSnapshot(SnapshotId snapshotId, List<IndexId> indices, MetaData clusterMetadata) {
+        if (blockOnInitialization) {
             blockExecution();
         }
-        super.initializeSnapshot(snapshotId, indices, metaData);
+        super.initializeSnapshot(snapshotId, indices, clusterMetadata);
     }
 
-    private static RepositorySettings overrideSettings(RepositorySettings repositorySettings, ClusterService clusterService) {
-        if (repositorySettings.settings().getAsBoolean("localize_location", false)) {
-            return new RepositorySettings(
-                    repositorySettings.globalSettings(),
-                    localizeLocation(repositorySettings.settings(), clusterService));
+    private static RepositoryMetaData overrideSettings(RepositoryMetaData metadata, Environment environment) {
+        // TODO: use another method of testing not being able to read the test file written by the master...
+        // this is super duper hacky
+        if (metadata.settings().getAsBoolean("localize_location", false)) {
+            Path location = PathUtils.get(metadata.settings().get("location"));
+            location = location.resolve(Integer.toString(environment.hashCode()));
+            return new RepositoryMetaData(metadata.name(), metadata.type(),
+                Settings.builder().put(metadata.settings()).put("location", location.toAbsolutePath()).build());
         } else {
-            return repositorySettings;
+            return metadata;
         }
-    }
-
-    private static Settings localizeLocation(Settings settings, ClusterService clusterService) {
-        Path location = PathUtils.get(settings.get("location"));
-        location = location.resolve(clusterService.localNode().getId());
-        return Settings.builder().put(settings).put("location", location.toAbsolutePath()).build();
     }
 
     private long incrementAndGetFailureCount() {
@@ -251,7 +250,11 @@ public class MockRepository extends FsRepository {
                 if (blobName.startsWith("__")) {
                     if (shouldFail(blobName, randomDataFileIOExceptionRate) && (incrementAndGetFailureCount() < maximumNumberOfFailures)) {
                         logger.info("throwing random IOException for file [{}] at path [{}]", blobName, path());
-                        throw new IOException("Random IOException");
+                        if (useLuceneCorruptionException) {
+                            throw new CorruptIndexException("Random corruption", "random file");
+                        } else {
+                            throw new IOException("Random IOException");
+                        }
                     } else if (blockOnDataFiles) {
                         logger.info("blocking I/O operation for file [{}] at path [{}]", blobName, path());
                         if (blockExecution() && waitAfterUnblock > 0) {
@@ -306,12 +309,6 @@ public class MockRepository extends FsRepository {
             }
 
             @Override
-            public void deleteBlobsByPrefix(String blobNamePrefix) throws IOException {
-                maybeIOExceptionOrBlock(blobNamePrefix);
-                super.deleteBlobsByPrefix(blobNamePrefix);
-            }
-
-            @Override
             public Map<String, BlobMetaData> listBlobs() throws IOException {
                 maybeIOExceptionOrBlock("");
                 return super.listBlobs();
@@ -325,20 +322,28 @@ public class MockRepository extends FsRepository {
 
             @Override
             public void move(String sourceBlob, String targetBlob) throws IOException {
-                maybeIOExceptionOrBlock(targetBlob);
-                super.move(sourceBlob, targetBlob);
-            }
-
-            @Override
-            public void writeBlob(String blobName, BytesReference bytes) throws IOException {
-                maybeIOExceptionOrBlock(blobName);
-                super.writeBlob(blobName, bytes);
+                if (RandomizedContext.current().getRandom().nextBoolean()) {
+                    // simulate a non-atomic move, since many blob container implementations
+                    // will not have an atomic move, and we should be able to handle that
+                    maybeIOExceptionOrBlock(targetBlob);
+                    super.writeBlob(targetBlob, super.readBlob(sourceBlob), 0L);
+                    super.deleteBlob(sourceBlob);
+                } else {
+                    // atomic move since this inherits from FsBlobContainer which provides atomic moves
+                    maybeIOExceptionOrBlock(targetBlob);
+                    super.move(sourceBlob, targetBlob);
+                }
             }
 
             @Override
             public void writeBlob(String blobName, InputStream inputStream, long blobSize) throws IOException {
                 maybeIOExceptionOrBlock(blobName);
                 super.writeBlob(blobName, inputStream, blobSize);
+                if (RandomizedContext.current().getRandom().nextBoolean()) {
+                    // for network based repositories, the blob may have been written but we may still
+                    // get an error with the client connection, so an IOException here simulates this
+                    maybeIOExceptionOrBlock(blobName);
+                }
             }
         }
     }

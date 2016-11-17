@@ -40,13 +40,11 @@ public class SettingsListenerIT extends ESIntegTestCase {
 
     @Override
     protected Collection<Class<? extends Plugin>> nodePlugins() {
-        return pluginList(SettingsListenerPlugin.class);
+        return Arrays.asList(SettingsListenerPlugin.class);
     }
 
     public static class SettingsListenerPlugin extends Plugin {
         private final SettingsTestingService service = new SettingsTestingService();
-        private static final Setting<Integer> SETTING = Setting.intSetting("index.test.new.setting", 0,
-            Property.Dynamic, Property.IndexScope);
 
         @Override
         public List<Setting<?>> getSettings() {
@@ -62,7 +60,7 @@ public class SettingsListenerIT extends ESIntegTestCase {
         }
 
         @Override
-        public Collection<Module> nodeModules() {
+        public Collection<Module> createGuiceModules() {
             return Collections.<Module>singletonList(new SettingsListenerModule(service));
         }
     }

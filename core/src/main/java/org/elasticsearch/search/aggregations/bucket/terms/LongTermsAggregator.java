@@ -37,13 +37,11 @@ import org.elasticsearch.search.aggregations.support.ValuesSource;
 
 import java.io.IOException;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
-/**
- *
- */
+import static java.util.Collections.emptyList;
+
 public class LongTermsAggregator extends TermsAggregator {
 
     protected final ValuesSource.Numeric valuesSource;
@@ -124,7 +122,7 @@ public class LongTermsAggregator extends TermsAggregator {
         final int size = (int) Math.min(bucketOrds.size(), bucketCountThresholds.getShardSize());
 
         long otherDocCount = 0;
-        BucketPriorityQueue ordered = new BucketPriorityQueue(size, order.comparator(this));
+        BucketPriorityQueue<LongTerms.Bucket> ordered = new BucketPriorityQueue<>(size, order.comparator(this));
         LongTerms.Bucket spare = null;
         for (long i = 0; i < bucketOrds.size(); i++) {
             if (spare == null) {
@@ -140,7 +138,7 @@ public class LongTermsAggregator extends TermsAggregator {
         }
 
         // Get the top buckets
-        final InternalTerms.Bucket[] list = new InternalTerms.Bucket[ordered.size()];
+        final LongTerms.Bucket[] list = new LongTerms.Bucket[ordered.size()];
         long survivingBucketOrds[] = new long[ordered.size()];
         for (int i = ordered.size() - 1; i >= 0; --i) {
             final LongTerms.Bucket bucket = (LongTerms.Bucket) ordered.pop();
@@ -151,22 +149,21 @@ public class LongTermsAggregator extends TermsAggregator {
 
         runDeferredCollections(survivingBucketOrds);
 
-        //Now build the aggs
+        // Now build the aggs
         for (int i = 0; i < list.length; i++) {
-          list[i].aggregations = bucketAggregations(list[i].bucketOrd);
-          list[i].docCountError = 0;
+            list[i].aggregations = bucketAggregations(list[i].bucketOrd);
+            list[i].docCountError = 0;
         }
 
-        return new LongTerms(name, order, format, bucketCountThresholds.getRequiredSize(), bucketCountThresholds.getShardSize(),
-                bucketCountThresholds.getMinDocCount(), Arrays.asList(list), showTermDocCountError, 0, otherDocCount, pipelineAggregators(),
-                metaData());
+        return new LongTerms(name, order, bucketCountThresholds.getRequiredSize(), bucketCountThresholds.getMinDocCount(),
+                pipelineAggregators(), metaData(), format, bucketCountThresholds.getShardSize(), showTermDocCountError, otherDocCount,
+                Arrays.asList(list), 0);
     }
 
     @Override
     public InternalAggregation buildEmptyAggregation() {
-        return new LongTerms(name, order, format, bucketCountThresholds.getRequiredSize(), bucketCountThresholds.getShardSize(),
-                bucketCountThresholds.getMinDocCount(), Collections.<InternalTerms.Bucket> emptyList(), showTermDocCountError, 0, 0,
-                pipelineAggregators(), metaData());
+        return new LongTerms(name, order, bucketCountThresholds.getRequiredSize(), bucketCountThresholds.getMinDocCount(),
+                pipelineAggregators(), metaData(), format, bucketCountThresholds.getShardSize(), showTermDocCountError, 0, emptyList(), 0);
     }
 
     @Override

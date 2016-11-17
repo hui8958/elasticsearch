@@ -34,9 +34,6 @@ import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 
-/**
- *
- */
 public class NodesInfoResponse extends BaseNodesResponse<NodeInfo> implements ToXContent {
 
     public NodesInfoResponse() {
@@ -71,12 +68,6 @@ public class NodesInfoResponse extends BaseNodesResponse<NodeInfo> implements To
             builder.field("build_hash", nodeInfo.getBuild().shortHash());
             if (nodeInfo.getTotalIndexingBuffer() != null) {
                 builder.byteSizeField("total_indexing_buffer", "total_indexing_buffer_in_bytes", nodeInfo.getTotalIndexingBuffer());
-            }
-
-            if (nodeInfo.getServiceAttributes() != null) {
-                for (Map.Entry<String, String> nodeAttribute : nodeInfo.getServiceAttributes().entrySet()) {
-                    builder.field(nodeAttribute.getKey(), nodeAttribute.getValue());
-                }
             }
 
             builder.startArray("roles");

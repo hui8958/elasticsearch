@@ -27,7 +27,7 @@ import org.elasticsearch.test.ESTestCase;
 
 import java.io.IOException;
 
-import static org.elasticsearch.ingest.IngestDocumentTests.assertIngestDocument;
+import static org.elasticsearch.ingest.IngestDocumentMatcher.assertIngestDocument;
 import static org.hamcrest.CoreMatchers.equalTo;
 import static org.hamcrest.CoreMatchers.instanceOf;
 
@@ -45,7 +45,7 @@ public class SimulateDocumentSimpleResultTests extends ESTestCase {
 
         BytesStreamOutput out = new BytesStreamOutput();
         simulateDocumentBaseResult.writeTo(out);
-        StreamInput streamInput = StreamInput.wrap(out.bytes());
+        StreamInput streamInput = out.bytes().streamInput();
         SimulateDocumentBaseResult otherSimulateDocumentBaseResult = new SimulateDocumentBaseResult(streamInput);
 
         if (isFailure) {
